@@ -60,16 +60,32 @@ func TestRunEmitsReportForDirectory(t *testing.T) {
 	assert.Contains(t, buf.String(), "a ref that moves")
 }
 
-// TestRunAcceptsExplicitFile pins that a named file is analyzed verbatim,
-// without the discovery rules a directory walk applies — so a workflow kept
-// somewhere unusual can still be checked deliberately.
+// TestRunAcceptsExplicitFile pins what naming a file outright does, and what it
+// does not. A file this analyzer judges is analyzed whatever the ignore rules
+// say about it; a file GitHub would never READ is not, because a moving ref in a
+// `.yml` outside `.github/workflows` is a finding about something that cannot
+// run — nobody can act on it, and a runner passing a changed-file list would
+// produce one for every stray YAML file in the repository.
 func TestRunAcceptsExplicitFile(t *testing.T) {
 	dir := t.TempDir()
-	file := writeWorkflow(t, dir, "elsewhere/ci.yml", pinned)
-	buf := swapStdout(t)
+	workflow := writeWorkflow(t, dir, ".github/workflows/ci.yml", pinned)
+	action := writeWorkflow(t, dir, "elsewhere/action.yml", pinned)
+	stray := writeWorkflow(t, dir, "elsewhere/ci.yml", pinned)
+	notes := writeWorkflow(t, dir, "notes.md", pinned)
 
-	require.Equal(t, 0, run([]string{file}))
-	assert.Contains(t, buf.String(), "yze/wfpolicy")
+	buf := swapStdout(t)
+	require.Equal(t, 0, run([]string{workflow}))
+	assert.Contains(t, buf.String(), "yze/wfpolicy", "a workflow where GitHub reads them")
+
+	buf = swapStdout(t)
+	require.Equal(t, 0, run([]string{action}))
+	assert.Contains(t, buf.String(), "yze/wfpolicy", "an action definition, which GitHub reads at any path")
+
+	for name, at := range map[string]string{"stray yaml": stray, "prose": notes} {
+		buf = swapStdout(t)
+		require.Equal(t, 0, run([]string{at}), name)
+		assert.NotContains(t, buf.String(), "yze/wfpolicy", "%s: GitHub never reads it", name)
+	}
 }
 
 // TestRunFailsOnMissingPath pins that a path that does not exist is an error,

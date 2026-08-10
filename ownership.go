@@ -46,6 +46,13 @@ func refDiagnostic(owners Owners, uses usesRef) (string, bool) {
 // differently, because the fix a reader needs is not the same sentence.
 func ownedDiagnostic(owner Owner, uses usesRef, ref gitRef) (string, bool) {
 	switch {
+	case commitSHA.MatchString(string(ref)):
+		// Tested BEFORE the major tag, because the two patterns overlap: an
+		// all-decimal abbreviated SHA — about one in twenty-seven — is also a
+		// bare major version, and `@1234567` passed as compliant while
+		// `@0123456` beside it was reported. A frozen commit reading as a
+		// floating tag is the silent pass this rule exists to prevent.
+		return fmt.Sprintf(ownedCommitMessage, uses, ref, owner), true
 	case majorTag.MatchString(string(ref)):
 		return "", false
 	case movingRefs[string(ref)]:
@@ -56,9 +63,6 @@ func ownedDiagnostic(owner Owner, uses usesRef, ref gitRef) (string, bool) {
 		// account that publishes `2.3.4` hands them a tag they never cut, on
 		// exactly the reasoning that made the unknown-major branch exist.
 		return fmt.Sprintf(ownedMessage, uses, ref, owner, major), true
-	}
-	if commitSHA.MatchString(string(ref)) {
-		return fmt.Sprintf(ownedCommitMessage, uses, ref, owner), true
 	}
 	return fmt.Sprintf(ownedUnknownMessage, uses, ref, owner), true
 }

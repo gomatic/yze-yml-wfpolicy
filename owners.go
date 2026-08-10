@@ -6,7 +6,10 @@ package wfpolicy
 // the tool would be wrong for every user but one, and would publish the account
 // names of the one it was right for.
 
-import "strings"
+import (
+	"strings"
+	"unicode"
+)
 
 // Owner is an account or organisation whose actions this fleet owns.
 type Owner string
@@ -37,13 +40,26 @@ const ownersVariable = "YZE_WFPOLICY_OWNERS"
 // has nothing to do with pinning, and configuration that contradicts the thing
 // it configures is read wrong by whoever inherits it.
 
+// isOwnerSeparator reports the characters that stand between two accounts.
+func isOwnerSeparator(between separatorRune) bool {
+	return between == ',' || unicode.IsSpace(rune(between))
+}
+
+// separatorRune is one character standing between two entries of the list.
+type separatorRune rune
+
 // ConfiguredOwners is the owner list this process was configured with, read
 // from the environment. It is a function rather than a package variable so a
 // test can set the variable and see the change, and so an unset variable is
 // plainly an empty list rather than a nil surprise.
 func ConfiguredOwners(lookup func(string) string) Owners {
 	owners := Owners{}
-	for _, name := range strings.Split(lookup(ownersVariable), ",") {
+	// Split on commas AND whitespace. The documented way to deliver this value
+	// is a workflow `env:` entry, where a YAML block scalar — one account per
+	// line — is the natural shape for a list; split on commas alone it was one
+	// long unmatchable string, and the float rule went inert with no way to
+	// learn it had.
+	for _, name := range strings.FieldsFunc(lookup(ownersVariable), func(r rune) bool { return isOwnerSeparator(separatorRune(r)) }) {
 		// Reduced to the ACCOUNT, because a reference is attributed by its
 		// first path segment: pasting `owner/repo` where an owner belongs
 		// matched nothing and said nothing, the same silent inertness that

@@ -11,6 +11,22 @@ import "gopkg.in/yaml.v3"
 
 // walk visits the value of every `uses:` key in the document, at any depth.
 func walk(node *yaml.Node, keys keyOwner, seen visited, visit func(*yaml.Node)) {
+	// Every node is walked once PER POSITION. A node reached twice from the same
+	// position is the same node — the same text, at the same line — so visiting
+	// it again reports one written reference as two findings, and doing so per
+	// REFERENCE is exponential in the nesting of the anchors that reach it.
+	//
+	// The position is part of the key because the two rules genuinely differ: an
+	// anchor spliced under `jobs` holds job IDs, and the same anchor sitting at
+	// the top level holds schema keys where `env` is an author's context and its
+	// contents are skipped. Keyed on the node alone, whichever position came
+	// FIRST decided — and a merge into `jobs` of an anchor defined above it lost
+	// every step in the job. There are two positions, so this bounds the walk at
+	// twice the document rather than at an exponential of it.
+	if seen[at{node: node, keys: keys}] {
+		return
+	}
+	seen[at{node: node, keys: keys}] = true
 	switch node.Kind {
 	case yaml.MappingNode:
 		// A mapping walks its own children, so that the values of author-named
@@ -33,22 +49,35 @@ func walk(node *yaml.Node, keys keyOwner, seen visited, visit func(*yaml.Node)) 
 	}
 }
 
-// visited is the set of anchors already being followed on the current path,
-// which is what keeps an anchor that refers to itself from walking forever.
-type visited map[*yaml.Node]bool
+// visited is the set of nodes already walked in this DOCUMENT.
+//
+// It is never cleared. Clearing it on the way back out — guarding only cycles on
+// the current path — let one anchor be re-expanded once per reference, which is
+// exponential in nesting depth: ten anchors each naming the previous one ten
+// times is 574 bytes of legal YAML and ten billion nodes. The gate did not fail
+// on it, it HUNG, and the size limit cannot help because the blowup is in the
+// depth rather than in the bytes. This is the billion-laughs shape, and an
+// analyzer whose stated purpose is defeating a hostile author must not be
+// wedged by one.
+//
+// Walking each node once per position is also the RIGHT answer for findings: a
+// reference written once is one defect, and expanding it per use reported it
+// three times for two uses, every copy at the anchor's line rather than at any
+// use site.
+type visited map[at]bool
 
-// walkAlias follows an alias to the node it names, once per path. A YAML
-// document may legally alias the same anchor from many places; only a CYCLE is
-// refused, and refusing it silently is correct — the anchor's contents have
-// already been walked by the reference that opened the cycle.
+// at is one node considered from one position — the key the walk remembers.
+type at struct {
+	node *yaml.Node
+	keys keyOwner
+}
+
+// walkAlias follows an alias to the node it names.
 func walkAlias(node *yaml.Node, keys keyOwner, seen visited, visit func(*yaml.Node)) {
-	target := node.Alias
-	if target == nil || seen[target] {
+	if node.Alias == nil {
 		return
 	}
-	seen[target] = true
-	defer delete(seen, target)
-	walk(target, keys, seen, visit)
+	walk(node.Alias, keys, seen, visit)
 }
 
 // visitMapping reports the `uses` values of one mapping's key/value pairs.
@@ -72,7 +101,11 @@ func visitMapping(node *yaml.Node, keys keyOwner, seen visited, visit func(*yaml
 
 // authored are the workflow keys whose CHILD keys are named by the author
 // rather than by GitHub. Nothing inside them is a schema field.
-var authored = map[string]bool{"with": true, "env": true}
+// `secrets` and `matrix` are here for the same reason as `with` and `env`: their
+// keys are secret names and matrix dimensions the AUTHOR chose, so a `uses`
+// among them is an input named uses that GitHub never resolves — a finding
+// nobody can act on.
+var authored = map[string]bool{"with": true, "env": true, "secrets": true, "matrix": true}
 
 // jobsKey introduces the one mapping whose KEYS the author chooses. A job may
 // be called `env`, and skipping it as an author-named context silenced every
@@ -94,6 +127,14 @@ type mappingKey string
 // and the `with:` inside it stopped being exempt. A workflow alternates
 // strictly: GitHub's keys, then the author's job IDs, then GitHub's keys again.
 func keysUnder(keys keyOwner, key mappingKey) keyOwner {
+	if key == mergeKey {
+		// A merge does not descend a level: `<<: *anchor` splices the anchor's
+		// keys into THIS mapping, so they are owned by whoever owns this one.
+		// Treating `<<` as an ordinary key made the merged mapping a job BODY
+		// when it was really a set of job IDs, and the whole-job evasion the
+		// positional rule closed was available again through a merge.
+		return keys
+	}
 	switch keys {
 	case jobIDs:
 		// Whatever the job is called, its BODY is GitHub's schema.
@@ -105,6 +146,10 @@ func keysUnder(keys keyOwner, key mappingKey) keyOwner {
 	}
 	return schemaKeys
 }
+
+// mergeKey is YAML's merge directive, which splices one mapping into another
+// rather than introducing a level of its own.
+const mergeKey mappingKey = "<<"
 
 // keyOwner says who chose the keys of the mapping being walked. It is a type
 // rather than a bare flag because the whole exemption turns on it: the same two

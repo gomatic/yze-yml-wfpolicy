@@ -38,8 +38,7 @@ import (
 // `yze/errconst`. This one emitted `yze/wfpin` after the repository was renamed
 // to describe both of its opposite rules rather than only the pinning half, and
 // a rule id is the identifier a baseline, a ratchet and a `//nolint` all name.
-// It could be corrected only before publication, and it was. — the suffix of its flat rule id and
-// the key the yze suite catalogs it under.
+// It could be corrected only before publication, and it was.
 const Name = "wfpolicy"
 
 // Tool is the suite name stamped on every diagnostic.

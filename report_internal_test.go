@@ -48,3 +48,19 @@ func TestFollowResolvesAnAliasedKey(t *testing.T) {
 
 	assert.Same(t, anchor, follow(&yaml.Node{Kind: yaml.AliasNode, Alias: anchor}))
 }
+
+// TestAnUnresolvedAliasValueIsWalkedPastRatherThanDereferenced pins the guard on
+// the value half, which the key half already had. An alias normally carries a
+// pointer to its anchor; a node built by hand — or one a parser leaves dangling
+// — does not, and dereferencing it would crash the analyzer on a document
+// instead of reporting it.
+func TestAnUnresolvedAliasValueIsWalkedPastRatherThanDereferenced(t *testing.T) {
+	t.Parallel()
+	orphan := &yaml.Node{Kind: yaml.AliasNode, Value: "missing"}
+
+	visits := 0
+	assert.NotPanics(t, func() {
+		walk(orphan, schemaKeys, visited{}, func(*yaml.Node) { visits++ })
+	})
+	assert.Zero(t, visits, "an alias naming nothing yields nothing")
+}
