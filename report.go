@@ -35,14 +35,14 @@ type FileReader func(path string) ([]byte, error)
 // Report runs the pin check over each file and aggregates the diagnostics into
 // the lean stickler-json report. A read failure aborts with ErrReadFile; a file
 // that is not YAML aborts with the wrapped ErrParse.
-func Report(read FileReader, files []string) (goyze.Report, error) {
+func Report(read FileReader, files []string, owners Owners) (goyze.Report, error) {
 	report := goyze.Report{}
 	for _, file := range files {
 		data, err := read(file)
 		if err != nil {
 			return goyze.Report{}, ErrReadFile.With(err, "path", file)
 		}
-		report.Diagnostics = append(report.Diagnostics, fileDiagnostics(Path(file), Source(data))...)
+		report.Diagnostics = append(report.Diagnostics, fileDiagnostics(Path(file), Source(data), owners)...)
 	}
 	return report, nil
 }
@@ -54,8 +54,8 @@ func Report(read FileReader, files []string) (goyze.Report, error) {
 // and aborting on it destroyed every other file's findings in the run. The file
 // is still REPORTED, so nothing is passed over in silence; it simply can no
 // longer silence its neighbours.
-func fileDiagnostics(file Path, source Source) []goyze.Diagnostic {
-	diags, err := Diagnostics(file, source)
+func fileDiagnostics(file Path, source Source, owners Owners) []goyze.Diagnostic {
+	diags, err := Diagnostics(file, source, owners)
 	if err != nil {
 		return []goyze.Diagnostic{{
 			Tool:     Tool,

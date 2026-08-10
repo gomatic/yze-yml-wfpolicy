@@ -34,7 +34,7 @@ func TestReportAggregatesEveryFilesFindings(t *testing.T) {
 		"b.yml": "jobs:\n  b:\n    steps:\n      - uses: o/a@v1\n",
 	})
 
-	report, err := wfpolicy.Report(read, []string{"a.yml", "b.yml"})
+	report, err := wfpolicy.Report(read, []string{"a.yml", "b.yml"}, nil)
 
 	require.NoError(t, err)
 	require.Len(t, report.Diagnostics, 1)
@@ -46,7 +46,7 @@ func TestReportAggregatesEveryFilesFindings(t *testing.T) {
 func TestReportSurfacesAReadFailure(t *testing.T) {
 	t.Parallel()
 
-	_, err := wfpolicy.Report(reader(nil), []string{"missing.yml"})
+	_, err := wfpolicy.Report(reader(nil), []string{"missing.yml"}, nil)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, wfpolicy.ErrReadFile)
@@ -65,7 +65,7 @@ func TestReportContainsAParseFailureToItsOwnFile(t *testing.T) {
 		"pinned.yml": "jobs:\n  b:\n    steps:\n      - uses: o/a@main\n",
 	})
 
-	report, err := wfpolicy.Report(read, []string{"broken.yml", "pinned.yml"})
+	report, err := wfpolicy.Report(read, []string{"broken.yml", "pinned.yml"}, nil)
 
 	require.NoError(t, err, "one unreadable file is not the whole run's failure")
 	paths := map[string]string{}
@@ -80,7 +80,7 @@ func TestReportContainsAParseFailureToItsOwnFile(t *testing.T) {
 func TestReportOfNoFilesIsAnEmptyReport(t *testing.T) {
 	t.Parallel()
 
-	report, err := wfpolicy.Report(reader(nil), nil)
+	report, err := wfpolicy.Report(reader(nil), nil, nil)
 
 	require.NoError(t, err)
 	assert.Empty(t, report.Diagnostics)

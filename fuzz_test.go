@@ -48,7 +48,7 @@ func FuzzDiagnostics(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, source string) {
-		diags, err := wfpolicy.Diagnostics("fuzz.yml", wfpolicy.Source(source))
+		diags, err := wfpolicy.Diagnostics("fuzz.yml", wfpolicy.Source(source), wfpolicy.Owners{"acme": true})
 		if err != nil {
 			if !errors.Is(err, wfpolicy.ErrParse) {
 				t.Fatalf("a failure must identify itself as a parse failure, got %v", err)

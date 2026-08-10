@@ -96,16 +96,16 @@ var movingRefs = map[string]bool{
 	"latest":  true,
 }
 
-// Diagnostics reports every workflow step pinned to a moving branch. path is
-// stamped on each diagnostic's location. A source that is not YAML yields the
-// parse error, so the caller surfaces a tool failure rather than a clean pass.
-func Diagnostics(path Path, source Source) ([]goyze.Diagnostic, error) {
-	return DiagnosticsFor(path, source, environmentOwners())
-}
-
-// DiagnosticsFor is [Diagnostics] with the owner list given explicitly, so a
-// caller that knows the fleet's accounts need not go through the environment.
-func DiagnosticsFor(path Path, source Source, owners Owners) ([]goyze.Diagnostic, error) {
+// Diagnostics reports every action reference that should not be where it is:
+// a moving ref on somebody else's action, and a frozen or branch ref on one of
+// the runner's own. path is stamped on each diagnostic's location.
+//
+// The owner list is a PARAMETER, never read from the process. A library that
+// reaches for the environment makes every caller — and every test — depend on
+// what happened to be exported: this one did, and the suite passed or failed
+// according to the developer's shell. Reading ambient state is main's job, at
+// the one boundary where it is visible.
+func Diagnostics(path Path, source Source, owners Owners) ([]goyze.Diagnostic, error) {
 	// EVERY document, not just the first. yaml.Unmarshal decodes one, which
 	// left a syntax error in any later document reported as a clean pass — the
 	// exact failure this rule's own contract forbids — and hid every pin
@@ -244,13 +244,15 @@ const containerScheme = "docker://"
 // with no `@` names a local action, which carries no ref to move, and a
 // container reference names no git ref at all.
 func movingRef(uses usesRef) (string, bool) {
-	if strings.HasPrefix(string(uses), containerScheme) {
+	// Trimmed FIRST. YAML preserves the space inside a quoted scalar, and
+	// testing the prefixes before trimming meant a single leading space turned
+	// a container image into a git ref and a local action into a remote one —
+	// each producing a finding the doc says this rule never makes.
+	trimmed := strings.TrimSpace(string(uses))
+	if strings.HasPrefix(trimmed, containerScheme) || strings.HasPrefix(trimmed, ".") {
 		return "", false
 	}
-	// The value is trimmed because YAML preserves the space inside a quoted
-	// scalar: `uses: "o/a@main "` is the same reference to GitHub and was
-	// invisible to a bare comparison.
-	_, ref, found := strings.Cut(strings.TrimSpace(string(uses)), "@")
+	_, ref, found := strings.Cut(trimmed, "@")
 	if !found {
 		return "", false
 	}

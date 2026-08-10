@@ -15,6 +15,15 @@ import (
 	wfpolicy "github.com/gomatic/yze-yml-wfpolicy"
 )
 
+// TestMain neutralises the one ambient input this command has. The owner list
+// is deliberately read from the environment at this boundary, so every test
+// here would otherwise pass or fail according to what the developer exported —
+// which is precisely the defect that moved the read out of the library.
+func TestMain(m *testing.M) {
+	lookupEnv = func(string) string { return "" }
+	os.Exit(m.Run())
+}
+
 // swapStdout captures what the command writes, restoring the real writer after
 // so tests cannot leak into one another.
 func swapStdout(t *testing.T) *bytes.Buffer {

@@ -20,7 +20,7 @@ import (
 // depend on the world.
 func analyze(t *testing.T, source string) []goyze.Diagnostic {
 	t.Helper()
-	diags, err := wfpolicy.DiagnosticsFor("workflow.yml", wfpolicy.Source(source), nil)
+	diags, err := wfpolicy.Diagnostics("workflow.yml", wfpolicy.Source(source), nil)
 	require.NoError(t, err)
 	return diags
 }
@@ -154,7 +154,7 @@ func TestAnEmptyDocumentIsSilent(t *testing.T) {
 func TestInvalidYAMLIsAToolFailure(t *testing.T) {
 	t.Parallel()
 
-	_, err := wfpolicy.Diagnostics("workflow.yml", "jobs:\n  - [unclosed\n")
+	_, err := wfpolicy.Diagnostics("workflow.yml", "jobs:\n  - [unclosed\n", nil)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, wfpolicy.ErrParse)
@@ -202,7 +202,7 @@ func TestEveryDocumentIsRead(t *testing.T) {
 func TestASyntaxErrorInALaterDocumentIsAToolFailure(t *testing.T) {
 	t.Parallel()
 
-	_, err := wfpolicy.Diagnostics("workflow.yml", "jobs: {}\n---\njobs:\n  - [unclosed\n")
+	_, err := wfpolicy.Diagnostics("workflow.yml", "jobs: {}\n---\njobs:\n  - [unclosed\n", nil)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, wfpolicy.ErrParse)

@@ -13,7 +13,7 @@ import (
 // analyzeFor runs the analyzer with an explicit owner list.
 func analyzeFor(t *testing.T, owners wfpolicy.Owners, source string) []goyze.Diagnostic {
 	t.Helper()
-	diags, err := wfpolicy.DiagnosticsFor("workflow.yml", wfpolicy.Source(source), owners)
+	diags, err := wfpolicy.Diagnostics("workflow.yml", wfpolicy.Source(source), owners)
 	require.NoError(t, err)
 	return diags
 }
@@ -121,36 +121,39 @@ func TestALocalOrContainerActionIsNeverOwned(t *testing.T) {
 
 	assert.Empty(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: ./.github/actions/x@v1.2.3\n"))
 	assert.Empty(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: docker://alpine:3.20\n"))
+	assert.Empty(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: docker://alpine@3.20\n"),
+		"an image REFERENCE carries an @, and cutting there names the owner `docker:` — the guard has to "+
+			"run before the split or it can never fire")
+	assert.Empty(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: \" docker://alpine@latest\"\n"),
+		"and a leading space must not turn an image tag into a git ref")
+	assert.Empty(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: \" ./.github/actions/x@main\"\n"),
+		"nor a local action into a remote one")
 }
 
-// TestDiagnosticsReadsTheOwnerListFromTheEnvironment pins the ONE path that
-// connects the configuration to the rule. Nothing exercised it: a change making
-// Diagnostics ignore the environment entirely, and a change renaming the
-// variable, both passed the whole suite at 100% coverage — so the documented
-// configuration surface of the analyzer could have been dead in every
-// production invocation without a single test noticing.
-//
-// It does not run in parallel because it sets a process-wide variable, and it
-// sets it rather than reading whatever was there: that is what makes it a unit
-// test.
-func TestDiagnosticsReadsTheOwnerListFromTheEnvironment(t *testing.T) {
+// TestDiagnosticsNeverReadsTheProcessEnvironment pins that the
+// library never reads the process itself. Reading ambient state made every
+// caller and every test depend on what happened to be exported — the suite
+// passed or failed according to the developer's shell — so the environment is
+// read once, by the command, and handed in as a value.
+func TestDiagnosticsNeverReadsTheProcessEnvironment(t *testing.T) {
+	t.Parallel()
+
 	source := wfpolicy.Source("jobs:\n  b:\n    steps:\n      - uses: acme/build-tools@v2.19.1\n")
 
-	t.Setenv("YZE_WFPIN_OWNERS", "acme")
-	configured, err := wfpolicy.Diagnostics("workflow.yml", source)
+	configured, err := wfpolicy.Diagnostics(
+		"workflow.yml", source, wfpolicy.ConfiguredOwners(func(string) string { return "acme" }),
+	)
 	require.NoError(t, err)
 	require.Len(t, configured, 1, "the account is ours, so a pinned patch is a finding")
 	assert.Contains(t, configured[0].Message, "is ours")
 
-	t.Setenv("YZE_WFPIN_OWNERS", "someone-else")
-	other, err := wfpolicy.Diagnostics("workflow.yml", source)
+	unset, err := wfpolicy.Diagnostics(
+		"workflow.yml",
+		source,
+		wfpolicy.ConfiguredOwners(func(string) string { return "" }),
+	)
 	require.NoError(t, err)
-	assert.Empty(t, other, "a third party's pinned patch is correct, not a finding")
-
-	t.Setenv("YZE_WFPIN_OWNERS", "")
-	unset, err := wfpolicy.Diagnostics("workflow.yml", source)
-	require.NoError(t, err)
-	assert.Empty(t, unset, "and an unconfigured run leaves the float half inert")
+	assert.Empty(t, unset, "an unconfigured run leaves the float half inert")
 }
 
 // TestOwnershipIgnoresTheCaseOfAnAccountName pins the fold. GitHub resolves an
@@ -188,7 +191,7 @@ func TestAPinnedRefNamesTheMajorTagOnlyWhenItHasOne(t *testing.T) {
 	assert.Contains(t, find("v2.19.1"), "`@v2`")
 	assert.Contains(t, find("2.3.4"), "`@v2`", "a version without the conventional v still has a major")
 	for _, ref := range []string{"0c907a75c2c80ebcb7f088228285e798b750cf8f", "v2-beta", "release", "release-1.2"} {
-		assert.NotContains(t, find(ref), "vN", "%s belongs to no major version, so none is invented", ref)
+		assert.NotContains(t, find(ref), "(`@v", "%s belongs to no major version, so none is suggested", ref)
 		assert.Contains(t, find(ref), "track the major tag")
 	}
 	assert.NotContains(t, find("release-1.2"), "`@v1`",

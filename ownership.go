@@ -8,7 +8,6 @@ package wfpolicy
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"strings"
 )
@@ -78,8 +77,16 @@ func ownedDiagnostic(owner Owner, uses usesRef, ref gitRef) (string, bool) {
 // ownedRef is the account and ref of an action this fleet owns, when the value
 // names one.
 func ownedRef(owners Owners, uses usesRef) (Owner, gitRef, bool) {
-	repo, ref, found := strings.Cut(strings.TrimSpace(string(uses)), "@")
-	if !found || strings.HasPrefix(repo, containerScheme) || strings.HasPrefix(repo, ".") {
+	trimmed := strings.TrimSpace(string(uses))
+	// Checked on the WHOLE value, before the split: cutting `docker://img@tag`
+	// at its first `@` yields the owner `docker:`, so a guard applied to that
+	// could only ever fire for an owner list that literally contained
+	// `docker:` — it was unreachable in every real configuration.
+	if strings.HasPrefix(trimmed, containerScheme) || strings.HasPrefix(trimmed, ".") {
+		return "", "", false
+	}
+	repo, ref, found := strings.Cut(trimmed, "@")
+	if !found {
 		return "", "", false
 	}
 	owner, _, _ := strings.Cut(repo, "/")
@@ -109,11 +116,6 @@ func majorOf(ref gitRef) (string, bool) {
 // majorPrefix reads the major version out of a pinned tag, with or without the
 // conventional leading v: `v2.19.1`, `2.3.4` and `v2.19` all belong to major 2.
 var majorPrefix = regexp.MustCompile(`^v?([0-9]+)\.`)
-
-// environmentOwners is the owner list this process was configured with.
-func environmentOwners() Owners {
-	return ConfiguredOwners(os.Getenv)
-}
 
 // ConfiguredOwners is the owner list this process was configured with, read
 // from the environment. It is a function rather than a package variable so a

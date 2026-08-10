@@ -20,6 +20,7 @@ var (
 	statPath              = os.Stat
 	walkDir               = filepath.WalkDir
 	checkIgnore           = gitCheckIgnore
+	lookupEnv             = os.Getenv
 	stdout      io.Writer = os.Stdout
 )
 
@@ -35,7 +36,9 @@ func run(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	report, err := wfpolicy.Report(readFile, files)
+	// The environment is read HERE, at the one boundary where ambient state is
+	// visible, and handed to the library as a value.
+	report, err := wfpolicy.Report(readFile, files, wfpolicy.ConfiguredOwners(lookupEnv))
 	if err != nil {
 		return fail(err)
 	}

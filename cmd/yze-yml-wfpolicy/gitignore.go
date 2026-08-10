@@ -49,17 +49,32 @@ func gitCheckIgnore(root repoDir, paths []string) (map[string]bool, error) {
 	// files that do not exist — the filter silently kept everything, and then
 	// silently dropped real findings once it started answering at all.
 	absolute, original := absolutePaths(paths)
-	command := execCommand("git", "check-ignore", "--stdin")
+	// -z, so the protocol is NUL-delimited. Newline-delimited, a path
+	// CONTAINING a newline split into two questions and came back C-quoted,
+	// which no lookup could match — the one file git had answered about was
+	// the one the filter failed to drop.
+	//
+	// core.excludesFile is neutralised. It points at a machine-local file that
+	// is in no repository, so the gate's verdict differed between a developer's
+	// machine and CI: this developer's global excludes list CHANGELOG, making
+	// the rule's flagship target invisible locally and a finding in CI. What a
+	// REPOSITORY ignores is the repository's business; what a machine ignores
+	// is not.
+	command := execCommand("git", "-c", "core.excludesFile=/dev/null", "-c", "core.quotePath=false",
+		"check-ignore", "--stdin", "-z")
 	command.Dir = string(root)
-	command.Stdin = strings.NewReader(strings.Join(absolute, "\n") + "\n")
+	command.Stdin = strings.NewReader(strings.Join(absolute, "\x00"))
 	out, err := command.Output()
-	if err != nil && len(out) == 0 {
-		// Exit status 1 means "nothing was ignored", which is not a failure;
-		// anything else means git could not answer, and the caller fails open.
+	if err != nil {
+		// Exit status 1 means "nothing was ignored", which is not a failure.
+		// ANY other status means git could not answer — and a partial answer
+		// is not an answer: asked about two repositories at once, git prints
+		// what it resolved and then aborts, and accepting that output dropped
+		// half the list while silently keeping the other half's ignored files.
 		return map[string]bool{}, exitedCleanly(err)
 	}
 	ignored := map[string]bool{}
-	for _, path := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for _, path := range strings.Split(strings.TrimRight(string(out), "\x00"), "\x00") {
 		if given, ok := original[path]; ok {
 			ignored[given] = true
 		}
