@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -146,4 +147,51 @@ func TestCompositeNamesAreNeverMatchedLooselyByCase(t *testing.T) {
 	assert.True(t, isWorkflowFile("deploy/action.yml"))
 	assert.False(t, isWorkflowFile("deploy/Action.yml"))
 	assert.False(t, isWorkflowFile("deploy/ACTION.YAML"))
+}
+
+// TestTrackedNeverReportsAWorkflowGitIgnores pins the rule that replaced an
+// ever-growing prune list: what a repository ignores differs per repository,
+// and git already knows. Telling an author to fix a pin in a workflow that is
+// not in their repository is a finding they cannot act on.
+func TestTrackedNeverReportsAWorkflowGitIgnores(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, ".github/workflows/ci.yml", pinned)
+	ignored := writeWorkflow(t, dir, "generated/action.yml", pinned)
+
+	original := checkIgnore
+	checkIgnore = func(repoDir, []string) (map[string]bool, error) {
+		return map[string]bool{ignored: true}, nil
+	}
+	t.Cleanup(func() { checkIgnore = original })
+	buf := swapStdout(t)
+
+	require.Equal(t, 0, run([]string{dir}))
+	out := buf.String()
+	assert.Contains(t, out, "ci.yml")
+	assert.NotContains(t, out, "generated")
+}
+
+// TestTrackedFailsOpenWhenGitCannotAnswer pins the direction failure takes: a
+// missing git must not become a silent clean pass.
+func TestTrackedFailsOpenWhenGitCannotAnswer(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, ".github/workflows/ci.yml", pinned)
+
+	original := checkIgnore
+	checkIgnore = func(repoDir, []string) (map[string]bool, error) { return nil, errors.New("not a git repository") }
+	t.Cleanup(func() { checkIgnore = original })
+	buf := swapStdout(t)
+
+	require.Equal(t, 0, run([]string{dir}))
+	assert.Contains(t, buf.String(), "ci.yml")
+}
+
+// TestIgnoreRootOfNoFilesIsTheWorkingDirectory pins the degenerate case: with
+// nothing found there is no repository to ask from, and the question must still
+// be well-formed rather than built from an empty path.
+func TestIgnoreRootOfNoFilesIsTheWorkingDirectory(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, repoDir("."), ignoreRoot(nil))
+	assert.Equal(t, repoDir(filepath.Join("a", "b")), ignoreRoot([]string{filepath.Join("a", "b", "ci.yml")}))
 }

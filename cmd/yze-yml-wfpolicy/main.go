@@ -15,11 +15,12 @@ import (
 
 // Injected collaborators, so the command is testable without real I/O.
 var (
-	osExit             = os.Exit
-	readFile           = os.ReadFile
-	statPath           = os.Stat
-	walkDir            = filepath.WalkDir
-	stdout   io.Writer = os.Stdout
+	osExit                = os.Exit
+	readFile              = os.ReadFile
+	statPath              = os.Stat
+	walkDir               = filepath.WalkDir
+	checkIgnore           = gitCheckIgnore
+	stdout      io.Writer = os.Stdout
 )
 
 func main() { osExit(run(os.Args[1:])) }
@@ -62,7 +63,16 @@ func workflowFiles(args []string) ([]string, error) {
 		}
 		files = appendUnseen(files, seen, found)
 	}
-	return files, nil
+	return tracked(checkIgnore, ignoreRoot(files), files), nil
+}
+
+// ignoreRoot is the directory the ignore question is asked from: the first
+// workflow's own directory, which is inside the repository being analyzed.
+func ignoreRoot(files []string) repoDir {
+	if len(files) == 0 {
+		return "."
+	}
+	return repoDir(filepath.Dir(files[0]))
 }
 
 // appendUnseen adds the files not already collected, in the order they were
