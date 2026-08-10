@@ -17,10 +17,13 @@ soft:
     - yze/invariant
 
 soft-baseline:
-  # Recorded from the 2026-08-02 full-suite sweep (stickler v0.10.0 /
-  # yze v0.31.0): the counts at first contact with the current soft rule
-  # set, on the ratchet — they may only fall. Probes (invariant, filesize,
-  # enumdiscrim) await adjudication; rollout rules (errtest, errtested,
-  # testfile, clidomain, cliflags, clilayout, fuzzreq, exhaustive) gate
-  # again at zero.
-  yze/enumdiscrim: 2
+  # This repository was written in 2026-08 and gated from its first commit,
+  # so it carries no inherited debt: every rule is at zero and stays there.
+  # The one entry below is a CEILING measured against this repository's own
+  # code, not a count copied from an older sweep — an inherited number is a
+  # budget for findings nobody has looked at.
+  #
+  # yze/enumdiscrim: the analyzer counts each `==` against a member of a
+  # const group, and this code discriminates the YAML/shell node kinds it is
+  # handed. Those switches are exhaustive where the linter can see them; the
+  # remaining comparisons await adjudication of the probe itself.

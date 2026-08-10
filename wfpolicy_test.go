@@ -3,16 +3,12 @@ package wfpolicy_test
 import (
 	"testing"
 
-	errs "github.com/gomatic/go-error"
 	goyze "github.com/gomatic/go-yze"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	wfpolicy "github.com/gomatic/yze-yml-wfpolicy"
 )
-
-// errUnreadable stands in for whatever the filesystem refuses with.
-const errUnreadable errs.Const = "unreadable"
 
 // analyze runs the analyzer over one workflow, failing the test on a parse
 // error.
@@ -158,66 +154,6 @@ func TestInvalidYAMLIsAToolFailure(t *testing.T) {
 	assert.ErrorIs(t, err, wfpolicy.ErrParse)
 }
 
-// reader serves file contents from a map, refusing anything absent.
-func reader(files map[string]string) wfpolicy.FileReader {
-	return func(path string) ([]byte, error) {
-		data, ok := files[path]
-		if !ok {
-			return nil, errUnreadable
-		}
-		return []byte(data), nil
-	}
-}
-
-// TestReportAggregatesEveryFilesFindings pins that a run over several files
-// yields all their findings, each naming the file it came from.
-func TestReportAggregatesEveryFilesFindings(t *testing.T) {
-	t.Parallel()
-
-	read := reader(map[string]string{
-		"a.yml": "jobs:\n  b:\n    steps:\n      - uses: o/a@main\n",
-		"b.yml": "jobs:\n  b:\n    steps:\n      - uses: o/a@v1\n",
-	})
-
-	report, err := wfpolicy.Report(read, []string{"a.yml", "b.yml"})
-
-	require.NoError(t, err)
-	require.Len(t, report.Diagnostics, 1)
-	assert.Equal(t, "a.yml", report.Diagnostics[0].Path)
-}
-
-// TestReportSurfacesAReadFailure pins that an unreadable file aborts the run
-// with its own sentinel rather than being skipped into a clean result.
-func TestReportSurfacesAReadFailure(t *testing.T) {
-	t.Parallel()
-
-	_, err := wfpolicy.Report(reader(nil), []string{"missing.yml"})
-
-	require.Error(t, err)
-	assert.ErrorIs(t, err, wfpolicy.ErrReadFile)
-	assert.ErrorIs(t, err, errUnreadable, "the cause survives so the reason is visible")
-}
-
-// TestReportSurfacesAParseFailure pins that malformed YAML aborts the run.
-func TestReportSurfacesAParseFailure(t *testing.T) {
-	t.Parallel()
-
-	_, err := wfpolicy.Report(reader(map[string]string{"a.yml": "jobs:\n  - [unclosed\n"}), []string{"a.yml"})
-
-	require.Error(t, err)
-	assert.ErrorIs(t, err, wfpolicy.ErrParse)
-}
-
-// TestReportOfNoFilesIsAnEmptyReport pins the trivial case explicitly.
-func TestReportOfNoFilesIsAnEmptyReport(t *testing.T) {
-	t.Parallel()
-
-	report, err := wfpolicy.Report(reader(nil), nil)
-
-	require.NoError(t, err)
-	assert.Empty(t, report.Diagnostics)
-}
-
 // TestEveryDiagnosticCarriesTheSuiteContract pins the fields the stickler
 // consumer reads: without the rule id a finding cannot be softened, baselined
 // or attributed, and without a position it cannot be navigated to.
@@ -236,4 +172,109 @@ func TestEveryDiagnosticCarriesTheSuiteContract(t *testing.T) {
 		assert.Positive(t, d.Col)
 		assert.NotEmpty(t, d.Message)
 	}
+}
+
+// TestEveryDocumentIsRead pins that a multi-document file is read past its
+// first `---`. yaml.Unmarshal decodes only the first document, which made every
+// pin after the separator invisible.
+func TestEveryDocumentIsRead(t *testing.T) {
+	t.Parallel()
+
+	diags := analyze(
+		t,
+		"jobs:\n  b:\n    steps:\n      - uses: o/a@v1\n---\njobs:\n  c:\n    steps:\n      - uses: o/a@main\n",
+	)
+
+	require.Len(t, diags, 1, "the second document is analyzed too")
+	assert.Contains(t, diags[0].Message, `"main"`)
+}
+
+// TestASyntaxErrorInALaterDocumentIsAToolFailure pins the other half of
+// multi-document reading, and the more dangerous half: decoding only the first
+// document turned a file whose second document is unparseable into a CLEAN
+// PASS, which is exactly the silent success this rule exists to prevent.
+func TestASyntaxErrorInALaterDocumentIsAToolFailure(t *testing.T) {
+	t.Parallel()
+
+	_, err := wfpolicy.Diagnostics("workflow.yml", "jobs: {}\n---\njobs:\n  - [unclosed\n")
+
+	require.Error(t, err)
+	assert.ErrorIs(t, err, wfpolicy.ErrParse)
+}
+
+// TestAnAliasResolvesToWhatItNames pins that a YAML alias is followed. An alias
+// node carries the ANCHOR's name as its value, so reading it directly compares
+// the label rather than the reference — a one-line evasion of the whole rule.
+func TestAnAliasResolvesToWhatItNames(t *testing.T) {
+	t.Parallel()
+
+	diags := analyze(
+		t,
+		"defaults:\n  action: &pinned o/a@main\njobs:\n  b:\n    steps:\n      - uses: *pinned\n      - uses: *pinned\n",
+	)
+
+	require.Len(t, diags, 2, "each use of the anchor is its own finding")
+	for i, d := range diags {
+		assert.Contains(t, d.Message, `"main"`, "the alias is followed to what it names")
+		assert.Equal(t, 6+i, d.Line, "the finding lands where the reference was written, not on the shared anchor")
+	}
+}
+
+// TestASurroundingSpaceDoesNotHideARef pins that a quoted value's whitespace is
+// trimmed. GitHub resolves `"o/a@main "` to the same branch, so a trailing
+// space inside the quotes must not buy an author a silent pass.
+func TestASurroundingSpaceDoesNotHideARef(t *testing.T) {
+	t.Parallel()
+
+	assert.Len(t, analyze(t, "jobs:\n  b:\n    steps:\n      - uses: \"o/a@main \"\n"), 1)
+}
+
+// TestAContainerImageIsNotAGitRef pins that `docker://` is not read. Its `@`
+// introduces an image digest or tag, and calling an image tag a branch is a
+// claim about a thing git does not own.
+func TestAContainerImageIsNotAGitRef(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, analyze(t, "jobs:\n  b:\n    steps:\n      - uses: docker://alpine:latest\n"))
+	assert.Empty(t, analyze(t, "jobs:\n  b:\n    steps:\n      - uses: docker://ghcr.io/o/i@main\n"))
+}
+
+// TestALocalActionCarriesNoRef pins that a path reference is silent: it names
+// this repository's own code at this commit, so there is nothing to pin.
+func TestALocalActionCarriesNoRef(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, analyze(t, "jobs:\n  b:\n    steps:\n      - uses: ./.github/actions/main\n"))
+}
+
+// TestAValueIsNeverMistakenForAKey pins the mapping's key/value pairing. YAML
+// stores a mapping as a flat alternating list, so a walk that stepped by one
+// would read every value as a key and report the entry that FOLLOWS a value
+// reading "uses".
+func TestAValueIsNeverMistakenForAKey(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, analyze(t, "jobs:\n  b:\n    steps:\n      - name: uses\n        o/a@main: irrelevant\n"))
+}
+
+// TestASequenceIsNotReadAsAMapping pins the kind guard on the walk: a sequence
+// holding the word `uses` next to a reference is a list of two strings, and
+// pairing its elements would report a finding from a document that has none.
+func TestASequenceIsNotReadAsAMapping(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, analyze(t, "tags:\n  - uses\n  - o/a@main\n"))
+}
+
+// TestTheFindingPointsAtTheColumnOfTheValue pins the column exactly, not merely
+// that one is present: a position that is always 1 navigates to the wrong place
+// on every indented step, which is every step a workflow has.
+func TestTheFindingPointsAtTheColumnOfTheValue(t *testing.T) {
+	t.Parallel()
+
+	diags := analyze(t, "jobs:\n  b:\n    steps:\n      - uses: o/a@main\n")
+
+	require.Len(t, diags, 1)
+	assert.Equal(t, 4, diags[0].Line)
+	assert.Equal(t, 15, diags[0].Col, "the value begins at column 15 of `      - uses: o/a@main`")
 }

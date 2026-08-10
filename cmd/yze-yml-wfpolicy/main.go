@@ -1,6 +1,6 @@
-// Command yze-yml-wfpolicy reports shell scripts missing the required shell
-// options, and `set` calls written in short flag form, emitting the lean
-// stickler-json report the stickler runner consumes.
+// Command yze-yml-wfpolicy reports GitHub Actions workflows and composite
+// actions that resolve a step's action from a moving ref instead of a fixed
+// one, emitting the lean stickler-json report the stickler runner consumes.
 package main
 
 import (
@@ -49,8 +49,8 @@ func fail(err error) int {
 	return 1
 }
 
-// shellFiles expands each argument: a directory contributes the workflow files
-// beneath it, and any other path is taken verbatim.
+// workflowFiles expands each argument: a directory contributes the workflow
+// files beneath it, and any other path is taken verbatim.
 func workflowFiles(args []string) ([]string, error) {
 	var files []string
 	for _, arg := range args {
@@ -71,24 +71,33 @@ func workflowFiles(args []string) ([]string, error) {
 	return files, nil
 }
 
-// searchDir is a directory argument expanded recursively to the workflow files it
-// contains.
+// searchDir is a directory argument expanded recursively to the workflow files
+// it contains.
 type searchDir string
 
-// workflowFilesUnder walks dir collecting every workflow file: a *.yml or
-// *.yaml under a .github/workflows directory, which is the only place GitHub
-// reads them from — a YAML file elsewhere is not a workflow and its `uses:`
-// key, if it has one, means something else entirely.
+// walkRoot is the directory a walk started from.
+type walkRoot string
+
+// entryPath is the path of one entry the walk visited.
+type entryPath string
+
+// entryName is a single path element — one directory's own name.
+type entryName string
+
+// workflowFilesUnder walks dir collecting every file GitHub reads as a workflow
+// or as a composite action.
 func workflowFilesUnder(dir searchDir) ([]string, error) {
+	root := filepath.Clean(string(dir))
 	var files []string
-	err := walkDir(string(dir), func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
+	err := walkDir(root, func(path string, d fs.DirEntry, err error) error {
+		switch {
+		case err != nil:
 			return err
-		}
-		if d.IsDir() {
-			return pruned(d.Name())
-		}
-		if isWorkflowFile(path) {
+		case d.IsDir():
+			return prunedDir(walkRoot(root), entryPath(path), entryName(d.Name()))
+		// Only a regular file is read. A FIFO blocks forever on open, and a
+		// device or socket is not source in any case.
+		case d.Type().IsRegular() && isWorkflowFile(entryPath(path)):
 			files = append(files, path)
 		}
 		return nil
@@ -96,22 +105,67 @@ func workflowFilesUnder(dir searchDir) ([]string, error) {
 	return files, err
 }
 
-// pruned skips the trees that hold somebody else's code. A dependency ships
-// its own workflows, and reporting them tells this repository to fix a pin it
-// does not own — three such findings turned up in node_modules the first time
-// this walked a real checkout. `.github` is deliberately NOT pruned despite
-// being hidden: it is the only directory a workflow can live in.
-func pruned(name string) error {
-	if name == "node_modules" || name == "vendor" || name == "testdata" {
+// prunedDir decides whether to descend into one directory. The walk root is
+// never pruned: asking for a directory by name and being handed a silent clean
+// pass is worse than any tree this skips.
+func prunedDir(root walkRoot, path entryPath, name entryName) error {
+	if string(path) == string(root) {
+		return nil
+	}
+	if pruned(name) || nestedRepository(path) {
 		return fs.SkipDir
 	}
 	return nil
 }
 
-// isWorkflowFile reports a path GitHub would read as a workflow.
-func isWorkflowFile(path string) bool {
-	if !strings.HasSuffix(path, ".yml") && !strings.HasSuffix(path, ".yaml") {
+// pruned reports the trees that hold somebody else's code. A dependency ships
+// its own workflows, and reporting them tells this repository to fix a pin it
+// does not own — three such findings turned up in node_modules the first time
+// this walked a real checkout. `.git` holds this repository's own object
+// store, not its source. `.github` is deliberately NOT pruned despite being
+// hidden: it is the only directory a workflow can live in.
+func pruned(name entryName) bool {
+	switch name {
+	case ".git", "node_modules", "vendor", "testdata":
+		return true
+	}
+	return false
+}
+
+// nestedRepository reports a directory that is its own git checkout — a
+// submodule, or a sibling repository sitting inside this tree. Its workflows
+// belong to that repository and are gated by that repository's own run;
+// reporting them here asks an author to fix a file this checkout does not own,
+// which is the same mistake as reporting a vendored dependency.
+func nestedRepository(path entryPath) bool {
+	_, err := statPath(filepath.Join(string(path), ".git"))
+	return err == nil
+}
+
+// workflowDir is the only directory GitHub reads a workflow from.
+var workflowDir = filepath.Join(".github", "workflows")
+
+// compositeNames are the file names a composite (or container, or JavaScript)
+// action is defined in. GitHub reads one at ANY path, because an action is
+// referenced by directory, so this is deliberately not anchored anywhere.
+var compositeNames = map[string]bool{"action.yml": true, "action.yaml": true}
+
+// isWorkflowFile reports a path GitHub would read as a workflow or as an
+// action definition. Both are read because both spell `uses:` and both run
+// with the calling job's credentials — a composite action pinned to a branch
+// is the same supply-chain hole as a workflow step pinned to one, and scanning
+// only workflows left the fleet's own composite actions unchecked.
+func isWorkflowFile(path entryPath) bool {
+	base := filepath.Base(string(path))
+	if compositeNames[strings.ToLower(base)] {
+		return true
+	}
+	if !strings.HasSuffix(base, ".yml") && !strings.HasSuffix(base, ".yaml") {
 		return false
 	}
-	return strings.HasSuffix(filepath.Dir(path), filepath.Join(".github", "workflows"))
+	// The directory must END IN the two components `.github/workflows`, not
+	// merely end with those characters: a suffix test also claimed
+	// `my.github/workflows`, whose files GitHub never reads.
+	dir := filepath.Dir(string(path))
+	return dir == workflowDir || strings.HasSuffix(dir, string(filepath.Separator)+workflowDir)
 }
