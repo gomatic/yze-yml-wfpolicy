@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 
+	goyze "github.com/gomatic/go-yze"
+
 	wfpolicy "github.com/gomatic/yze-yml-wfpolicy"
 )
 
@@ -20,7 +22,7 @@ var (
 	statPath               = os.Stat
 	walkDir                = filepath.WalkDir
 	evalSymlinks           = filepath.EvalSymlinks
-	checkIgnore            = gitCheckIgnore
+	checkIgnore            = goyze.GitCheckIgnore
 	lookupEnv              = os.Getenv
 	stdout       io.Writer = os.Stdout
 )
@@ -75,8 +77,11 @@ func workflowFiles(args []string) ([]string, error) {
 		// repository does not own, not to overrule an author who asked.
 		named = appendUnseen(named, seen, found)
 	}
-	return append(named, tracked(checkIgnore, walked)...), nil
+	return append(named, goyze.Tracked(checkIgnore, walked)...), nil
 }
+
+// filePath is one discovered file, in the spelling the report will carry.
+type filePath string
 
 // canonical is the path with symlinks resolved, used ONLY as the identity of a
 // file. Deduplication keyed on the spelling reported one workflow twice when it

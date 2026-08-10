@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"testing"
 
+	goyze "github.com/gomatic/go-yze"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -160,7 +161,7 @@ func TestTrackedNeverReportsAWorkflowGitIgnores(t *testing.T) {
 	ignored := writeWorkflow(t, dir, "generated/action.yml", pinned)
 
 	original := checkIgnore
-	checkIgnore = func(repoDir, []string) (map[string]bool, error) {
+	checkIgnore = func(goyze.RepoDir, []string) (map[string]bool, error) {
 		return map[string]bool{ignored: true}, nil
 	}
 	t.Cleanup(func() { checkIgnore = original })
@@ -179,7 +180,7 @@ func TestTrackedFailsOpenWhenGitCannotAnswer(t *testing.T) {
 	writeWorkflow(t, dir, ".github/workflows/ci.yml", pinned)
 
 	original := checkIgnore
-	checkIgnore = func(repoDir, []string) (map[string]bool, error) { return nil, errors.New("not a git repository") }
+	checkIgnore = func(goyze.RepoDir, []string) (map[string]bool, error) { return nil, errors.New("not a git repository") }
 	t.Cleanup(func() { checkIgnore = original })
 	buf := swapStdout(t)
 
@@ -227,7 +228,7 @@ func TestANamedWorkflowIsAnalyzedEvenWhenGitIgnoresIt(t *testing.T) {
 	named := writeWorkflow(t, dir, "generated/action.yml", pinned)
 
 	original := checkIgnore
-	checkIgnore = func(repoDir, []string) (map[string]bool, error) {
+	checkIgnore = func(goyze.RepoDir, []string) (map[string]bool, error) {
 		return map[string]bool{named: true}, nil
 	}
 	t.Cleanup(func() { checkIgnore = original })

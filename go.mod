@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/gomatic/go-error v0.3.15
-	github.com/gomatic/go-yze v0.10.6
+	github.com/gomatic/go-yze v0.11.0
 	github.com/stretchr/testify v1.11.1
 	gopkg.in/yaml.v3 v3.0.1
 )
