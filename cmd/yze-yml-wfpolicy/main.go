@@ -22,6 +22,7 @@ var (
 	statPath               = os.Stat
 	walkDir                = filepath.WalkDir
 	evalSymlinks           = filepath.EvalSymlinks
+	absolutePath           = filepath.Abs
 	checkIgnore            = goyze.GitCheckIgnore
 	lookupEnv              = os.Getenv
 	stdout       io.Writer = os.Stdout
@@ -104,9 +105,17 @@ type filePath string
 // was reached two ways — through a link and directly, or by two spellings of
 // one argument — which doubles a count the ratchet is measured against.
 func canonical(path filePath) string {
-	resolved, err := evalSymlinks(string(path))
+	// ABSOLUTE FIRST, then resolved. EvalSymlinks resolves links without
+	// absolutising, so a relative spelling keeps the working directory's own
+	// unresolved prefix while an absolute one does not — two identities for one
+	// file, reported twice.
+	absolute, err := absolutePath(string(path))
 	if err != nil {
-		return string(path)
+		absolute = string(path)
+	}
+	resolved, err := evalSymlinks(absolute)
+	if err != nil {
+		return absolute
 	}
 	return resolved
 }

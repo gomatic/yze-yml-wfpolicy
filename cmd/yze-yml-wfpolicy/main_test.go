@@ -241,3 +241,20 @@ func TestANamedWorkflowIsNotFilteredWhateverTheArgumentOrder(t *testing.T) {
 		assert.Contains(t, buf.String(), "ci.yml", "%s: the author asked for it by name", name)
 	}
 }
+
+// TestCanonicalFallsBackWhenAPathCannotBeMadeAbsolute pins the first arm of
+// identity: a path the working directory makes unresolvable keeps its own
+// spelling, so the file is still analyzed rather than dropped for being
+// unidentifiable.
+func TestCanonicalFallsBackWhenAPathCannotBeMadeAbsolute(t *testing.T) {
+	dir := t.TempDir()
+	file := writeWorkflow(t, dir, ".github/workflows/ci.yml", pinned)
+
+	original := absolutePath
+	absolutePath = func(string) (string, error) { return "", os.ErrInvalid }
+	t.Cleanup(func() { absolutePath = original })
+	buf := swapStdout(t)
+
+	require.Equal(t, 0, run([]string{file}))
+	assert.NotEmpty(t, buf.String(), "the file is still analyzed rather than dropped for being unidentifiable")
+}
