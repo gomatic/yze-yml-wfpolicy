@@ -26,15 +26,15 @@ func analyzeFor(t *testing.T, owners wfpolicy.Owners, source string) []goyze.Dia
 func TestAnOwnedActionMustTrackItsMajorTag(t *testing.T) {
 	t.Parallel()
 
-	owners := wfpolicy.Owners{"nicerobot": true}
+	owners := wfpolicy.Owners{"acme": true}
 
 	for _, ref := range []string{"v2", "v10"} {
-		diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: nicerobot/tools.build/ci/go@"+ref+"\n")
+		diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: acme/build-tools/ci/go@"+ref+"\n")
 		assert.Empty(t, diags, "@%s is the major tag, which is what ours must track", ref)
 	}
 
 	for _, ref := range []string{"v2.19.1", "v2.0.0", "0c907a75c2c80ebcb7f088228285e798b750cf8f"} {
-		diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: nicerobot/tools.build/ci/go@"+ref+"\n")
+		diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: acme/build-tools/ci/go@"+ref+"\n")
 		require.Len(t, diags, 1, "@%s freezes an action we publish", ref)
 		assert.Contains(t, diags[0].Message, "is ours", "the message says why the rule inverted")
 		assert.Contains(t, diags[0].Message, "pins", "a frozen version is described as pinned")
@@ -48,9 +48,9 @@ func TestAnOwnedActionMustTrackItsMajorTag(t *testing.T) {
 func TestAnOwnedActionOnABranchIsNamedAsABranch(t *testing.T) {
 	t.Parallel()
 
-	owners := wfpolicy.Owners{"nicerobot": true}
+	owners := wfpolicy.Owners{"acme": true}
 
-	diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: nicerobot/tools.admin@main\n")
+	diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: acme/admin-tools@main\n")
 
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, "a branch", "it rides a branch, it does not pin one")
@@ -64,9 +64,9 @@ func TestAnOwnedActionOnABranchIsNamedAsABranch(t *testing.T) {
 func TestTheFloatRuleNamesTheRefTheAuthorShouldHaveWritten(t *testing.T) {
 	t.Parallel()
 
-	owners := wfpolicy.Owners{"nicerobot": true}
+	owners := wfpolicy.Owners{"acme": true}
 
-	diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: nicerobot/tools.build@v2.19.1\n")
+	diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: acme/build-tools@v2.19.1\n")
 
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, "`@v2`", "the major tag is named outright")
@@ -80,7 +80,7 @@ func TestTheFloatRuleNamesTheRefTheAuthorShouldHaveWritten(t *testing.T) {
 func TestRefDiagnosticInvertsOnlyForAnOwnedAccount(t *testing.T) {
 	t.Parallel()
 
-	owners := wfpolicy.Owners{"nicerobot": true}
+	owners := wfpolicy.Owners{"acme": true}
 
 	assert.Empty(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: actions/checkout@v5.1.2\n"),
 		"a third party's pinned patch is correct, not a finding")
@@ -94,7 +94,7 @@ func TestRefDiagnosticInvertsOnlyForAnOwnedAccount(t *testing.T) {
 func TestAnUnconfiguredRunNeverInventsAnOwnershipFinding(t *testing.T) {
 	t.Parallel()
 
-	source := "jobs:\n  b:\n    steps:\n      - uses: nicerobot/tools.build@v2.19.1\n"
+	source := "jobs:\n  b:\n    steps:\n      - uses: acme/build-tools@v2.19.1\n"
 
 	assert.Empty(t, analyzeFor(t, wfpolicy.Owners{}, source))
 	assert.Empty(t, analyzeFor(t, nil, source))
@@ -105,9 +105,9 @@ func TestAnUnconfiguredRunNeverInventsAnOwnershipFinding(t *testing.T) {
 func TestConfiguredOwnersReadsTheEnvironment(t *testing.T) {
 	t.Parallel()
 
-	owners := wfpolicy.ConfiguredOwners(func(string) string { return " nicerobot , gomatic ,, " })
+	owners := wfpolicy.ConfiguredOwners(func(string) string { return " acme , acme-labs ,, " })
 
-	assert.Equal(t, wfpolicy.Owners{"nicerobot": true, "gomatic": true}, owners)
+	assert.Equal(t, wfpolicy.Owners{"acme": true, "acme-labs": true}, owners)
 	assert.Empty(t, wfpolicy.ConfiguredOwners(func(string) string { return "" }), "unset means inert")
 }
 
@@ -117,7 +117,7 @@ func TestConfiguredOwnersReadsTheEnvironment(t *testing.T) {
 func TestALocalOrContainerActionIsNeverOwned(t *testing.T) {
 	t.Parallel()
 
-	owners := wfpolicy.Owners{"nicerobot": true, "docker:": true}
+	owners := wfpolicy.Owners{"acme": true, "docker:": true}
 
 	assert.Empty(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: ./.github/actions/x@v1.2.3\n"))
 	assert.Empty(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: docker://alpine:3.20\n"))

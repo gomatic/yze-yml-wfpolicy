@@ -20,15 +20,24 @@ type gitRef string
 type Owner string
 
 // Owners are the accounts whose actions must FLOAT. It is configuration rather
-// than a constant because which accounts are "ours" is a property of the fleet,
-// not of the rule — a copy of this analyzer used anywhere else owns different
-// accounts, and a hardcoded list would be wrong for every one of them.
+// than a constant, and it has NO default, because which accounts are "ours" is
+// a property of whoever is running the check — never of this tool. Anyone can
+// use this analyzer; they list their own accounts and the rule inverts for
+// those. A list shipped in the tool would be wrong for every user but one, and
+// would publish the account names of the one it was right for.
 type Owners map[Owner]bool
 
 // ownersVariable is the environment variable the owner list is read from: a
 // comma-separated list of accounts. Empty leaves the float rule inert, so an
 // unconfigured run reports only the moving-ref half rather than inventing a
 // finding about a repository whose ownership it was told nothing about.
+//
+// An environment variable is the whole configuration surface on purpose. The
+// value is the user's private business — it names the accounts they control —
+// so it must be settable from somewhere private, and it must reach a CI run
+// without ever appearing in a public repository. A repository or organisation
+// secret/variable passed through in a workflow's `env:` does both: the public
+// workflow names the VARIABLE, and the value stays wherever its owner put it.
 const ownersVariable = "YZE_WFPIN_OWNERS"
 
 // majorTag is the only ref an owned action may name: `@v2`, never `@v2.19.1`
