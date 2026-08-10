@@ -35,10 +35,12 @@ type FileReader func(path string) ([]byte, error)
 // finding is one diagnostic's rendered message.
 type finding string
 
-// ErrTooLarge reports a file past the size this rule will read. A workflow is
-// not megabytes; a file that big is generated output, a data dump, or a mistake,
-// and reading it costs its own size in memory for a rule that cannot apply.
-const ErrTooLarge errs.Const = "workflow is too large to analyze"
+// ErrTooLarge reports a file past the size this rule will read. It IS the shared
+// sentinel, not a second one beside it: the bound is enforced in two places —
+// here, and at the one place the command reads a file — and two sentinels for
+// one condition meant `errors.Is` answered false for whichever layer the caller
+// had not thought of.
+const ErrTooLarge = goyze.ErrTooLarge
 
 // findingLimit bounds how many findings ONE file contributes, and reportLimit
 // how many one RUN carries.
