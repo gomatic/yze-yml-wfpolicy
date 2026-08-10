@@ -24,7 +24,6 @@ package wfpolicy
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"strings"
 
@@ -60,6 +59,19 @@ type usesRef string
 const message = "`uses: %s` resolves %q, a ref that moves; pin an immutable tag or a commit SHA so the " +
 	"action this workflow runs cannot change without the workflow changing"
 
+// ownedMessage formats a pinned-own-action finding, which is the OPPOSITE
+// defect: an action this fleet publishes must track its major tag, so a fix
+// reaches every consumer on their next run.
+const ownedMessage = "`uses: %s` pins %q, but %s is ours; track the major tag (`@v%s`) instead — a pinned " +
+	"patch means a CVE fix or a gate change needs an edit in every repository that consumes it"
+
+// ownedBranchMessage formats the other owned-action defect: not frozen, but
+// riding a BRANCH. A branch can be force-pushed and names no release, so it is
+// neither the immutability a third-party pin gives nor the deliberate movement
+// a major tag gives — it is the worst of both.
+const ownedBranchMessage = "`uses: %s` rides %q, a branch, but %s is ours; track the major tag instead — a " +
+	"branch can be force-pushed and names no release, so it gives neither immutability nor a deliberate upgrade"
+
 // usesKey is the workflow field naming the action a step runs.
 const usesKey = "uses"
 
@@ -83,6 +95,12 @@ var movingRefs = map[string]bool{
 // stamped on each diagnostic's location. A source that is not YAML yields the
 // parse error, so the caller surfaces a tool failure rather than a clean pass.
 func Diagnostics(path Path, source Source) ([]goyze.Diagnostic, error) {
+	return DiagnosticsFor(path, source, environmentOwners())
+}
+
+// DiagnosticsFor is [Diagnostics] with the owner list given explicitly, so a
+// caller that knows the fleet's accounts need not go through the environment.
+func DiagnosticsFor(path Path, source Source, owners Owners) ([]goyze.Diagnostic, error) {
 	// EVERY document, not just the first. yaml.Unmarshal decodes one, which
 	// left a syntax error in any later document reported as a clean pass — the
 	// exact failure this rule's own contract forbids — and hid every pin
@@ -97,7 +115,7 @@ func Diagnostics(path Path, source Source) ([]goyze.Diagnostic, error) {
 		if root == nil {
 			return diags, nil
 		}
-		diags = append(diags, documentDiagnostics(path, root)...)
+		diags = append(diags, documentDiagnostics(path, owners, root)...)
 	}
 }
 
@@ -118,10 +136,10 @@ func nextDocument(decoder *yaml.Decoder) (*yaml.Node, error) {
 }
 
 // documentDiagnostics reports every moving-ref pin in one document.
-func documentDiagnostics(path Path, root *yaml.Node) []goyze.Diagnostic {
+func documentDiagnostics(path Path, owners Owners, root *yaml.Node) []goyze.Diagnostic {
 	var diags []goyze.Diagnostic
 	walk(root, func(value *yaml.Node) {
-		if diag, ok := pinDiagnostic(path, value); ok {
+		if diag, ok := pinDiagnostic(path, owners, value); ok {
 			diags = append(diags, diag)
 		}
 	})
@@ -192,11 +210,12 @@ func follow(value *yaml.Node) *yaml.Node {
 	return value
 }
 
-// pinDiagnostic reports the finding for one `uses:` value, if it names a moving
-// branch.
-func pinDiagnostic(path Path, value *yaml.Node) (goyze.Diagnostic, bool) {
+// pinDiagnostic reports the finding for one `uses:` value, if it names a ref
+// that should not be there — a moving one for somebody else's action, or a
+// pinned one for ours.
+func pinDiagnostic(path Path, owners Owners, value *yaml.Node) (goyze.Diagnostic, bool) {
 	uses := reference(value)
-	ref, ok := movingRef(uses)
+	text, ok := refDiagnostic(owners, uses)
 	if !ok {
 		return goyze.Diagnostic{}, false
 	}
@@ -207,7 +226,7 @@ func pinDiagnostic(path Path, value *yaml.Node) (goyze.Diagnostic, bool) {
 		Line:     value.Line,
 		Col:      value.Column,
 		Severity: goyze.SeverityError,
-		Message:  fmt.Sprintf(message, uses, ref),
+		Message:  text,
 	}, true
 }
 
