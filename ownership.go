@@ -69,7 +69,10 @@ func ownedDiagnostic(owner Owner, uses usesRef, ref gitRef) (string, bool) {
 	case movingRefs[string(ref)]:
 		return fmt.Sprintf(ownedBranchMessage, uses, ref, owner), true
 	}
-	return fmt.Sprintf(ownedMessage, uses, ref, owner, majorOf(ref)), true
+	if major, ok := majorOf(ref); ok {
+		return fmt.Sprintf(ownedMessage, uses, ref, owner, major), true
+	}
+	return fmt.Sprintf(ownedUnknownMessage, uses, ref, owner), true
 }
 
 // ownedRef is the account and ref of an action this fleet owns, when the value
@@ -80,25 +83,32 @@ func ownedRef(owners Owners, uses usesRef) (Owner, gitRef, bool) {
 		return "", "", false
 	}
 	owner, _, _ := strings.Cut(repo, "/")
-	if !owners[Owner(owner)] {
+	// FOLDED. GitHub resolves an account name case-insensitively — `Actions/
+	// Checkout` IS `actions/checkout` — so a mis-cased reference ran the same
+	// action while getting the OPPOSITE rule, and a mis-cased entry in the
+	// owner list silently made this half of the analyzer inert with no error.
+	// The REF keeps its case, because git refs really are case-sensitive.
+	if !owners[Owner(strings.ToLower(owner))] {
 		return "", "", false
 	}
 	return Owner(owner), gitRef(ref), true
 }
 
-// majorOf is the major version a pinned ref belongs to, for a message that
-// names the ref the author should have written. A ref that is not a version at
-// all — a branch, a SHA — yields "N", because guessing a number from a commit
-// hash would be inventing one.
-func majorOf(ref gitRef) string {
-	if version := majorPrefix.FindStringSubmatch(string(ref)); version != nil {
-		return version[1]
+// majorOf is the major version a pinned ref belongs to, reporting whether it
+// has one at all. A commit SHA does not, and neither does a ref that is not a
+// version — printing a literal "vN" into an instruction that tells an author
+// which ref to write handed them something that is not a ref.
+func majorOf(ref gitRef) (string, bool) {
+	version := majorPrefix.FindStringSubmatch(string(ref))
+	if version == nil {
+		return "", false
 	}
-	return "N"
+	return version[1], true
 }
 
-// majorPrefix reads the major version out of a fully-pinned tag.
-var majorPrefix = regexp.MustCompile(`^v([0-9]+)\.`)
+// majorPrefix reads the major version out of a pinned tag, with or without the
+// conventional leading v: `v2.19.1`, `2.3.4` and `v2.19` all belong to major 2.
+var majorPrefix = regexp.MustCompile(`^v?([0-9]+)\.`)
 
 // environmentOwners is the owner list this process was configured with.
 func environmentOwners() Owners {
@@ -113,7 +123,7 @@ func ConfiguredOwners(lookup func(string) string) Owners {
 	owners := Owners{}
 	for _, name := range strings.Split(lookup(ownersVariable), ",") {
 		if trimmed := strings.TrimSpace(name); trimmed != "" {
-			owners[Owner(trimmed)] = true
+			owners[Owner(strings.ToLower(trimmed))] = true
 		}
 	}
 	return owners

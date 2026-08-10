@@ -16,14 +16,8 @@ soft:
   add:
     - yze/invariant
 
-soft-baseline:
-  # This repository was written in 2026-08 and gated from its first commit,
-  # so it carries no inherited debt: every rule is at zero and stays there.
-  # The one entry below is a CEILING measured against this repository's own
-  # code, not a count copied from an older sweep — an inherited number is a
-  # budget for findings nobody has looked at.
-  #
-  # yze/enumdiscrim: the analyzer counts each `==` against a member of a
-  # const group, and this code discriminates the YAML/shell node kinds it is
-  # handed. Those switches are exhaustive where the linter can see them; the
-  # remaining comparisons await adjudication of the probe itself.
+# No soft-baseline entries. This repository was written in 2026-08 and gated
+# from its first commit, so it carries no inherited debt and every rule is at
+# zero. A baseline is a budget for findings nobody has looked at; there is
+# nothing here to budget for, so the key is omitted entirely rather than left
+# empty under prose describing a ceiling that does not exist.

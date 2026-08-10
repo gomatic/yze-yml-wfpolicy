@@ -53,14 +53,27 @@ func TestReportSurfacesAReadFailure(t *testing.T) {
 	assert.ErrorIs(t, err, errUnreadable, "the cause survives so the reason is visible")
 }
 
-// TestReportSurfacesAParseFailure pins that malformed YAML aborts the run.
-func TestReportSurfacesAParseFailure(t *testing.T) {
+// TestReportContainsAParseFailureToItsOwnFile pins the containment that
+// replaced an aborting run. `%YAML 1.2` is a legal directive GitHub accepts and
+// this parser rejects, and aborting on it destroyed every other file's findings.
+// The file is still REPORTED, so nothing is passed over in silence.
+func TestReportContainsAParseFailureToItsOwnFile(t *testing.T) {
 	t.Parallel()
 
-	_, err := wfpolicy.Report(reader(map[string]string{"a.yml": "jobs:\n  - [unclosed\n"}), []string{"a.yml"})
+	read := reader(map[string]string{
+		"broken.yml": "jobs:\n  - [unclosed\n",
+		"pinned.yml": "jobs:\n  b:\n    steps:\n      - uses: o/a@main\n",
+	})
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, wfpolicy.ErrParse)
+	report, err := wfpolicy.Report(read, []string{"broken.yml", "pinned.yml"})
+
+	require.NoError(t, err, "one unreadable file is not the whole run's failure")
+	paths := map[string]string{}
+	for _, d := range report.Diagnostics {
+		paths[d.Path] += d.Message
+	}
+	assert.Contains(t, paths["broken.yml"], "cannot be analyzed as a workflow")
+	assert.Contains(t, paths["pinned.yml"], "a ref that moves", "its neighbour keeps every finding it earned")
 }
 
 // TestReportOfNoFilesIsAnEmptyReport pins the trivial case explicitly.

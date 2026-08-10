@@ -5,7 +5,9 @@
 // executes changes without a single line of that workflow changing — the
 // supply-chain shape where an upstream force-push, or a compromised upstream,
 // runs inside a job holding this repository's credentials. A tag or a commit
-// SHA names something that does not move on its own.
+// SHA names something that does not move on its own — for an action we do NOT
+// control. For one we publish the rule inverts, because a major tag moving is
+// the point: see [Owners].
 //
 // The rule is a DENYLIST of refs that are branches by construction — main,
 // master, HEAD and the handful of conventional development-branch names — and
@@ -69,6 +71,9 @@ const ownedMessage = "`uses: %s` pins %q, but %s is ours; track the major tag (`
 // riding a BRANCH. A branch can be force-pushed and names no release, so it is
 // neither the immutability a third-party pin gives nor the deliberate movement
 // a major tag gives — it is the worst of both.
+const ownedUnknownMessage = "`uses: %s` pins %q, but %s is ours; track the major tag instead — a pinned commit " +
+	"means a CVE fix or a gate change needs an edit in every repository that consumes it"
+
 const ownedBranchMessage = "`uses: %s` rides %q, a branch, but %s is ours; track the major tag instead — a " +
 	"branch can be force-pushed and names no release, so it gives neither immutability nor a deliberate upgrade"
 

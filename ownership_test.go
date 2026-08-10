@@ -122,3 +122,101 @@ func TestALocalOrContainerActionIsNeverOwned(t *testing.T) {
 	assert.Empty(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: ./.github/actions/x@v1.2.3\n"))
 	assert.Empty(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: docker://alpine:3.20\n"))
 }
+
+// TestDiagnosticsReadsTheOwnerListFromTheEnvironment pins the ONE path that
+// connects the configuration to the rule. Nothing exercised it: a change making
+// Diagnostics ignore the environment entirely, and a change renaming the
+// variable, both passed the whole suite at 100% coverage — so the documented
+// configuration surface of the analyzer could have been dead in every
+// production invocation without a single test noticing.
+//
+// It does not run in parallel because it sets a process-wide variable, and it
+// sets it rather than reading whatever was there: that is what makes it a unit
+// test.
+func TestDiagnosticsReadsTheOwnerListFromTheEnvironment(t *testing.T) {
+	source := wfpolicy.Source("jobs:\n  b:\n    steps:\n      - uses: acme/build-tools@v2.19.1\n")
+
+	t.Setenv("YZE_WFPIN_OWNERS", "acme")
+	configured, err := wfpolicy.Diagnostics("workflow.yml", source)
+	require.NoError(t, err)
+	require.Len(t, configured, 1, "the account is ours, so a pinned patch is a finding")
+	assert.Contains(t, configured[0].Message, "is ours")
+
+	t.Setenv("YZE_WFPIN_OWNERS", "someone-else")
+	other, err := wfpolicy.Diagnostics("workflow.yml", source)
+	require.NoError(t, err)
+	assert.Empty(t, other, "a third party's pinned patch is correct, not a finding")
+
+	t.Setenv("YZE_WFPIN_OWNERS", "")
+	unset, err := wfpolicy.Diagnostics("workflow.yml", source)
+	require.NoError(t, err)
+	assert.Empty(t, unset, "and an unconfigured run leaves the float half inert")
+}
+
+// TestOwnershipIgnoresTheCaseOfAnAccountName pins the fold. GitHub resolves an
+// account case-insensitively — `Actions/Checkout` IS `actions/checkout` — so a
+// mis-cased reference ran the identical action while receiving the OPPOSITE
+// instruction, and a mis-cased entry in the owner list silently made this half
+// of the analyzer inert with no error at all.
+func TestOwnershipIgnoresTheCaseOfAnAccountName(t *testing.T) {
+	t.Parallel()
+
+	for _, spelling := range []string{"acme", "Acme", "ACME"} {
+		owners := wfpolicy.ConfiguredOwners(func(string) string { return spelling })
+		for _, reference := range []string{"acme/act@v1.2.3", "Acme/act@v1.2.3", "ACME/act@v1.2.3"} {
+			diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: "+reference+"\n")
+			require.Len(t, diags, 1, "owners=%s reference=%s", spelling, reference)
+			assert.Contains(t, diags[0].Message, "is ours", "owners=%s reference=%s", spelling, reference)
+		}
+	}
+}
+
+// TestAPinnedRefNamesTheMajorTagOnlyWhenItHasOne pins what the message tells an
+// author to write. A commit SHA belongs to no major version, and printing a
+// literal "vN" into an instruction naming the ref they should use handed them
+// something that is not a ref.
+func TestAPinnedRefNamesTheMajorTagOnlyWhenItHasOne(t *testing.T) {
+	t.Parallel()
+
+	owners := wfpolicy.Owners{"acme": true}
+	find := func(ref string) string {
+		diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: acme/act@"+ref+"\n")
+		require.Len(t, diags, 1)
+		return diags[0].Message
+	}
+
+	assert.Contains(t, find("v2.19.1"), "`@v2`")
+	assert.Contains(t, find("2.3.4"), "`@v2`", "a version without the conventional v still has a major")
+	for _, ref := range []string{"0c907a75c2c80ebcb7f088228285e798b750cf8f", "v2-beta", "release", "release-1.2"} {
+		assert.NotContains(t, find(ref), "vN", "%s belongs to no major version, so none is invented", ref)
+		assert.Contains(t, find(ref), "track the major tag")
+	}
+	assert.NotContains(t, find("release-1.2"), "`@v1`",
+		"the version must OPEN the ref; finding one buried inside it invents a major tag the ref never had")
+}
+
+// TestAnOwnedReferenceIsTrimmedAndAttributed pins the two guards the owned half
+// shares with the moving-ref half: surrounding space inside a quoted value is
+// not part of the reference, and a local path names no account at all.
+func TestAnOwnedReferenceIsTrimmedAndAttributed(t *testing.T) {
+	t.Parallel()
+
+	owners := wfpolicy.Owners{"acme": true, ".": true}
+
+	assert.Len(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: \" acme/act@v1.2.3 \"\n"), 1,
+		"a quoted value's whitespace is not part of the reference")
+	assert.Empty(t, analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: ./.github/actions/x@v1.2.3\n"),
+		"a path reference names no account, whatever the owner list says")
+}
+
+// TestAnOwnedReferenceWithNoRefNamesNothing pins the degenerate spelling, which
+// GitHub rejects outright: `owner/action@` carries no ref to judge in either
+// direction.
+func TestAnOwnedReferenceWithNoRefNamesNothing(t *testing.T) {
+	t.Parallel()
+
+	diags := analyzeFor(t, wfpolicy.Owners{"acme": true}, "jobs:\n  b:\n    steps:\n      - uses: acme/act@\n")
+
+	require.Len(t, diags, 1, "an empty ref is not the major tag, so it is still reported")
+	assert.Contains(t, diags[0].Message, "is ours")
+}

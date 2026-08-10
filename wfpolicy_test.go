@@ -12,9 +12,15 @@ import (
 
 // analyze runs the analyzer over one workflow, failing the test on a parse
 // error.
+// analyze runs the analyzer with NO configured owners, which is the third-party
+// half of the rule. It goes through DiagnosticsFor rather than Diagnostics on
+// purpose: Diagnostics reads the process environment, so a suite built on it
+// passed or failed according to what the developer happened to have exported —
+// verified, `YZE_WFPIN_OWNERS=actions go test` used to fail. A unit test may not
+// depend on the world.
 func analyze(t *testing.T, source string) []goyze.Diagnostic {
 	t.Helper()
-	diags, err := wfpolicy.Diagnostics("workflow.yml", wfpolicy.Source(source))
+	diags, err := wfpolicy.DiagnosticsFor("workflow.yml", wfpolicy.Source(source), nil)
 	require.NoError(t, err)
 	return diags
 }
