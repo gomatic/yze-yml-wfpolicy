@@ -107,3 +107,26 @@ func TestAnUnconfiguredRunNeverInventsAnOwnershipFinding(t *testing.T) {
 	assert.Empty(t, analyzeFor(t, wfpolicy.Owners{}, source))
 	assert.Empty(t, analyzeFor(t, nil, source))
 }
+
+// TestAnAllDecimalShaIsACommitAndNotAMajorTag pins the ORDER the two patterns
+// are tried in, which nothing covered. About one in twenty-seven abbreviated
+// SHAs is all digits, and a bare major version is digits too — so with the tag
+// tested first `@1234567` passed as compliant while `@0123456` beside it was
+// reported, which is the silent pass this rule exists to prevent.
+func TestAnAllDecimalShaIsACommitAndNotAMajorTag(t *testing.T) {
+	t.Parallel()
+
+	owners := wfpolicy.Owners{"acme": true}
+	find := func(ref string) []goyze.Diagnostic {
+		return analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: acme/act@"+ref+"\n")
+	}
+
+	for _, sha := range []string{"1234567", "0123456", "12345678901234567890", "0c907a7"} {
+		diags := find(sha)
+		require.Len(t, diags, 1, "%s is a commit", sha)
+		assert.Contains(t, diags[0].Message, "a pinned commit", "%s", sha)
+	}
+	for _, tag := range []string{"v2", "2", "v10", "0"} {
+		assert.Empty(t, find(tag), "%s is the major tag this rule asks for", tag)
+	}
+}

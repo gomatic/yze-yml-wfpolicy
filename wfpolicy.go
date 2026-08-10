@@ -123,6 +123,14 @@ var movingRefs = map[string]bool{
 // according to the developer's shell. Reading ambient state is main's job, at
 // the one boundary where it is visible.
 func Diagnostics(path Path, source Source, owners Owners) ([]goyze.Diagnostic, error) {
+	if goyze.ByteCount(len(source)) > SizeLimit {
+		// Enforced in the LIBRARY, not only in the command. The bound was
+		// installed at the one place the command reads a file and nowhere else,
+		// so every other caller of this package — and the exported API is the
+		// package — had none: 64x the limit was 463 MB resident and 512x was
+		// 3.6 GB, each returning a clean result.
+		return nil, ErrTooLarge.With(nil, "path", string(path), "bytes", len(source))
+	}
 	// EVERY document, not just the first. yaml.Unmarshal decodes one, which
 	// left a syntax error in any later document reported as a clean pass — the
 	// exact failure this rule's own contract forbids — and hid every pin
@@ -160,7 +168,7 @@ func nextDocument(decoder *yaml.Decoder) (*yaml.Node, error) {
 // documentDiagnostics reports every moving-ref pin in one document.
 func documentDiagnostics(path Path, owners Owners, root *yaml.Node) []goyze.Diagnostic {
 	var diags []goyze.Diagnostic
-	walk(root, schemaKeys, visited{}, func(value *yaml.Node) {
+	walk(root, schemaKeys, newVisited(), func(value *yaml.Node) {
 		if diag, ok := pinDiagnostic(path, owners, value); ok {
 			diags = append(diags, diag)
 		}

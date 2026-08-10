@@ -203,3 +203,31 @@ func TestTheFindingPointsAtTheColumnOfTheValue(t *testing.T) {
 	assert.Equal(t, 4, diags[0].Line)
 	assert.Equal(t, 15, diags[0].Col, "the value begins at column 15 of `      - uses: o/a@main`")
 }
+
+// TestAnAliasIsFollowedAsAValueAndAsAKey pins both halves of alias resolution,
+// neither of which had a test. A `uses:` whose VALUE is an alias, and a `uses`
+// spelled as an aliased KEY, are each a one-line evasion of the whole rule.
+func TestAnAliasIsFollowedAsAValueAndAsAKey(t *testing.T) {
+	t.Parallel()
+
+	value := "a: &a actions/checkout@main\njobs:\n  b:\n    steps:\n      - uses: *a\n"
+	assert.Len(t, analyzeFor(t, nil, value), 1, "an aliased value is the reference it names")
+
+	key := "k: &k uses\njobs:\n  b:\n    steps:\n      - *k : actions/checkout@main\n"
+	assert.Len(t, analyzeFor(t, nil, key), 1, "and an aliased key is still the uses key")
+}
+
+// TestEveryDocumentInAStreamIsRead pins that a multi-document file is read
+// through. Stopping at the first document that produced a finding was invisible
+// to a suite whose only multi-document test put the finding in the second.
+func TestEveryDocumentInAStreamIsRead(t *testing.T) {
+	t.Parallel()
+	stream := "jobs:\n  a:\n    steps:\n      - uses: o/a@main\n" +
+		"---\njobs:\n  b:\n    steps:\n      - uses: o/b@main\n"
+
+	diags := analyzeFor(t, nil, stream)
+
+	require.Len(t, diags, 2, "a pin in each document is two findings")
+	assert.Contains(t, diags[0].Message, "o/a@main")
+	assert.Contains(t, diags[1].Message, "o/b@main")
+}

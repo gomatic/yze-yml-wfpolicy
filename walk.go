@@ -23,10 +23,9 @@ func walk(node *yaml.Node, keys keyOwner, seen visited, visit func(*yaml.Node)) 
 	// FIRST decided — and a merge into `jobs` of an anchor defined above it lost
 	// every step in the job. There are two positions, so this bounds the walk at
 	// twice the document rather than at an exponential of it.
-	if seen[at{node: node, keys: keys}] {
+	if seen.walkedFrom(node, keys) {
 		return
 	}
-	seen[at{node: node, keys: keys}] = true
 	switch node.Kind {
 	case yaml.MappingNode:
 		// A mapping walks its own children, so that the values of author-named
@@ -49,7 +48,47 @@ func walk(node *yaml.Node, keys keyOwner, seen visited, visit func(*yaml.Node)) 
 	}
 }
 
-// visited is the set of nodes already walked in this DOCUMENT.
+// visited is what one document's walk remembers: which nodes have been walked
+// from which position, and which values have already been reported.
+//
+// They are SEPARATE sets because they answer different questions. A node must be
+// walked once per POSITION, since the same anchor spliced under `jobs` and
+// sitting at the top level is judged by different rules. But a `uses:` VALUE is
+// one written reference however many positions reach it — reporting it per
+// position emitted two byte-identical diagnostics at one line and column, and a
+// ratchet keyed on the count moved by two for a one-line fix.
+type visited struct {
+	walked   map[at]bool
+	reported map[*yaml.Node]bool
+}
+
+// newVisited starts one document's walk.
+func newVisited() visited {
+	return visited{walked: map[at]bool{}, reported: map[*yaml.Node]bool{}}
+}
+
+// walkedFrom reports whether this node has already been walked from this
+// position, recording it when it has not.
+func (v visited) walkedFrom(node *yaml.Node, keys keyOwner) bool {
+	key := at{node: node, keys: keys}
+	if v.walked[key] {
+		return true
+	}
+	v.walked[key] = true
+	return false
+}
+
+// alreadyReported reports whether this value has already been handed to the
+// visitor, recording it when it has not.
+func (v visited) alreadyReported(value *yaml.Node) bool {
+	if v.reported[value] {
+		return true
+	}
+	v.reported[value] = true
+	return false
+}
+
+// The set of nodes already walked in this DOCUMENT.
 //
 // It is never cleared. Clearing it on the way back out — guarding only cycles on
 // the current path — let one anchor be re-expanded once per reference, which is
@@ -64,8 +103,6 @@ func walk(node *yaml.Node, keys keyOwner, seen visited, visit func(*yaml.Node)) 
 // reference written once is one defect, and expanding it per use reported it
 // three times for two uses, every copy at the anchor's line rather than at any
 // use site.
-type visited map[at]bool
-
 // at is one node considered from one position — the key the walk remembers.
 type at struct {
 	node *yaml.Node
@@ -92,7 +129,9 @@ func visitMapping(node *yaml.Node, keys keyOwner, seen visited, visit func(*yaml
 			// resolves it, and reporting one is a finding nobody can act on.
 			continue
 		}
-		if key.Value == usesKey {
+		if key.Value == usesKey && !seen.alreadyReported(value) {
+			// Once per VALUE. One written reference is one defect however many
+			// positions an alias carries it to.
 			visit(value)
 		}
 		walk(value, keysUnder(keys, mappingKey(key.Value)), seen, visit)

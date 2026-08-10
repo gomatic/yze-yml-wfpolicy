@@ -1,6 +1,8 @@
 package wfpolicy_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	errs "github.com/gomatic/go-error"
@@ -107,4 +109,59 @@ func TestReportOfNoFilesIsAnEmptyReport(t *testing.T) {
 	report := wfpolicy.Report(reader(nil), nil, nil)
 
 	assert.Empty(t, report.Diagnostics)
+}
+
+// TestTheReportIsBoundedByFileAndByRun pins the two caps the size limit does not
+// provide. Three hundred files each WITHIN the size limit produced 1 092 000
+// diagnostics, a 437 MB report and 1.94 GB resident — a gate falling over on
+// input it had already accepted as fine.
+func TestTheReportIsBoundedByFileAndByRun(t *testing.T) {
+	t.Parallel()
+	crowded := "jobs:\n  b:\n    steps:\n" + strings.Repeat("      - uses: o/a@main\n", 1500)
+	files := make([]string, 0, 12)
+	contents := map[string]string{}
+	for i := range 12 {
+		name := fmt.Sprintf("w%02d.yml", i)
+		files = append(files, name)
+		contents[name] = crowded
+	}
+
+	report := wfpolicy.Report(reader(contents), files, nil)
+
+	assert.LessOrEqual(t, len(report.Diagnostics), 10_001, "the run is bounded")
+	last := report.Diagnostics[len(report.Diagnostics)-1]
+	assert.Contains(t, last.Message, "onward are omitted", "and says so rather than passing over it")
+	assert.Contains(t, last.Message, "18000 pin findings", "naming the true total, not the reported one")
+	assert.NotEmpty(t, last.Path, "attributed to a file the runner can key on")
+}
+
+// TestOneCrowdedFileIsBoundedOnItsOwn names what fileFindings promises and
+// pins the per-file cap, so a single
+// pathological workflow cannot fill a run's whole allowance.
+func TestOneCrowdedFileIsBoundedOnItsOwn(t *testing.T) {
+	t.Parallel()
+	crowded := "jobs:\n  b:\n    steps:\n" + strings.Repeat("      - uses: o/a@main\n", 1500)
+
+	report := wfpolicy.Report(reader(map[string]string{"w.yml": crowded}), []string{"w.yml"}, nil)
+
+	require.Len(t, report.Diagnostics, 1001)
+	assert.Contains(t, report.Diagnostics[1000].Message, "1500 pin findings in this file")
+}
+
+// TestTheLibraryRefusesAFileTooLargeToBeAWorkflow pins the bound in the LIBRARY.
+// It was installed at the one place the COMMAND reads a file and nowhere else,
+// so every other caller of this package — and the exported API is the package —
+// had none: 64 times the limit was 463 MB resident, and 512 times it was 3.6 GB,
+// each returning a clean result.
+func TestTheLibraryRefusesAFileTooLargeToBeAWorkflow(t *testing.T) {
+	t.Parallel()
+	head := "jobs:\n  b:\n    steps:\n      - uses: o/a@v1\n"
+	atLimit := head + strings.Repeat("#", int(wfpolicy.SizeLimit)-len(head))
+	require.Len(t, atLimit, int(wfpolicy.SizeLimit))
+
+	_, err := wfpolicy.Diagnostics("w.yml", wfpolicy.Source(atLimit), nil)
+	assert.NoError(t, err, "a file exactly at the limit is read")
+
+	_, over := wfpolicy.Diagnostics("w.yml", wfpolicy.Source(atLimit+"#"), nil)
+	assert.ErrorIs(t, over, wfpolicy.ErrTooLarge, "and one byte more is refused")
 }

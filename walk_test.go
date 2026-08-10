@@ -157,3 +157,44 @@ func TestTheVisitedSetBoundsTheWalkWithoutLosingAPosition(t *testing.T) {
 	require.Len(t, diags, 1, "the position that reads it still reads it")
 	assert.Contains(t, diags[0].Message, "actions/checkout@main")
 }
+
+// TestOneWrittenReferenceIsOneFindingHoweverManyPositionsReachIt pins the split
+// between the two things a walk remembers. A node must be walked once per
+// POSITION, because the same anchor spliced under `jobs` and sitting at the top
+// level is judged by different rules — but a `uses:` VALUE is one written
+// reference however many positions reach it, and reporting it per position
+// emitted two byte-identical diagnostics at one line and column.
+func TestOneWrittenReferenceIsOneFindingHoweverManyPositionsReachIt(t *testing.T) {
+	t.Parallel()
+
+	for name, source := range map[string]string{
+		"aliased into jobs": "x: &a\n  uses: actions/checkout@main\njobs: *a\n",
+		"merged into jobs":  "x: &a\n  uses: actions/checkout@main\njobs:\n  <<: *a\n",
+		"used twice":        "s: &s\n  uses: actions/checkout@main\njobs:\n  b:\n    steps:\n      - *s\n      - *s\n",
+		"three positions":   "x: &a\n  uses: actions/checkout@main\njobs: *a\nother: *a\n",
+	} {
+		diags := analyzeFor(t, nil, source)
+
+		require.Len(t, diags, 1, "%s: one written reference is one defect", name)
+		assert.Equal(t, 2, diags[0].Line, "%s: reported where the author wrote it", name)
+	}
+}
+
+// TestAMatrixHoldsTheAuthorsOwnKeys pins the skip added for `strategy.matrix`,
+// which nothing covered. Its keys are dimension names the author chose, so a
+// `uses` among them is a matrix dimension called uses — GitHub resolves no
+// action from it, and reporting one is a finding nobody can act on.
+func TestAMatrixHoldsTheAuthorsOwnKeys(t *testing.T) {
+	t.Parallel()
+
+	// A SCALAR value, because a sequence yields no reference either way and so
+	// could not tell the skip from its absence — the test that used one passed
+	// with the skip removed.
+	exempt := "jobs:\n  a:\n    strategy:\n      matrix:\n        uses: x/y@main\n" +
+		"    steps:\n      - run: echo\n"
+	assert.Empty(t, analyzeFor(t, nil, exempt), "a matrix dimension named uses is not an action")
+
+	genuine := "jobs:\n  a:\n    strategy:\n      matrix:\n        go: ['1.26']\n" +
+		"    steps:\n      - uses: actions/checkout@main\n"
+	assert.Len(t, analyzeFor(t, nil, genuine), 1, "and a real step beside it is still read")
+}

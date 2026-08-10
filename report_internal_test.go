@@ -1,6 +1,7 @@
 package wfpolicy
 
 import (
+	"strings"
 	"testing"
 
 	errs "github.com/gomatic/go-error"
@@ -60,7 +61,26 @@ func TestAnUnresolvedAliasValueIsWalkedPastRatherThanDereferenced(t *testing.T) 
 
 	visits := 0
 	assert.NotPanics(t, func() {
-		walk(orphan, schemaKeys, visited{}, func(*yaml.Node) { visits++ })
+		walk(orphan, schemaKeys, newVisited(), func(*yaml.Node) { visits++ })
 	})
 	assert.Zero(t, visits, "an alias naming nothing yields nothing")
+}
+
+// TestFileFindingsContainsAReadFailureAndBoundsTheRest names fileFindings and
+// pins both claims it makes: a file the gate cannot open becomes ONE finding
+// against that file rather than the run's error, and a file with more findings
+// than anyone can act on is cut with its true count named.
+func TestFileFindingsContainsAReadFailureAndBoundsTheRest(t *testing.T) {
+	t.Parallel()
+
+	refused, held := fileFindings(func(string) ([]byte, error) { return nil, errRefused }, "locked.yml", nil)
+	require.Len(t, refused, 1, "one unreadable file is one finding")
+	assert.Equal(t, 1, held)
+	assert.Equal(t, "locked.yml", refused[0].Path)
+
+	crowded := "jobs:\n  b:\n    steps:\n" + strings.Repeat("      - uses: o/a@main\n", findingLimit+250)
+	found, all := fileFindings(func(string) ([]byte, error) { return []byte(crowded), nil }, "w.yml", nil)
+
+	assert.Len(t, found, findingLimit+1, "the cut, plus the notice that says so")
+	assert.Equal(t, findingLimit+250, all, "and the count is what the file holds, not what was reported")
 }

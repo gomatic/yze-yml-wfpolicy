@@ -35,6 +35,31 @@ type FileReader func(path string) ([]byte, error)
 // finding is one diagnostic's rendered message.
 type finding string
 
+// ErrTooLarge reports a file past the size this rule will read. A workflow is
+// not megabytes; a file that big is generated output, a data dump, or a mistake,
+// and reading it costs its own size in memory for a rule that cannot apply.
+const ErrTooLarge errs.Const = "workflow is too large to analyze"
+
+// findingLimit bounds how many findings ONE file contributes, and reportLimit
+// how many one RUN carries.
+//
+// The size bound alone does not bound the report: three hundred files each
+// WITHIN it produced 1 092 000 diagnostics, a 437 MB report and 1.94 GB
+// resident. A file with a thousand moving refs is one problem rather than a
+// thousand, and so is a tree with ten thousand.
+const (
+	findingLimit = 1_000
+	reportLimit  = 10_000
+)
+
+// truncationMessage formats the finding that stands for the ones not reported.
+const truncationMessage = "%d pin findings in this file, of which %d are reported; a file with this many is " +
+	"one problem rather than that many, and reporting them all costs more memory than reading it did"
+
+// runTruncationMessage formats the finding that stands for the rest of a run.
+const runTruncationMessage = "%d pin findings across this run, of which %d are reported; findings from %s " +
+	"onward are omitted, because a tree with this many is one problem rather than that many"
+
 // SizeLimit is the largest file read, in bytes.
 //
 // A workflow is a few kilobytes; the largest in the fleet is under forty. A file
@@ -58,15 +83,50 @@ const SizeLimit goyze.ByteCount = 128 << 10
 // through the one door still open.
 func Report(read FileReader, files []string, owners Owners) goyze.Report {
 	report := goyze.Report{}
+	total := 0
+	truncatedAt := Path("")
 	for _, file := range files {
-		data, err := read(file)
-		if err != nil {
-			report.Diagnostics = append(report.Diagnostics, unreadable(Path(file), err))
+		found, held := fileFindings(read, Path(file), owners)
+		// The TRUE count, not the reported one: a file past its own limit hands
+		// back a truncated slice, and summing slices counted this analyzer's
+		// truncation instead of the file's findings.
+		total += held
+		if truncatedAt != "" {
+			// Past the limit the run keeps COUNTING but stops collecting, so
+			// the total it reports is the true one.
 			continue
 		}
-		report.Diagnostics = append(report.Diagnostics, fileDiagnostics(Path(file), Source(data), owners)...)
+		room := reportLimit - len(report.Diagnostics)
+		if len(found) > room {
+			report.Diagnostics = append(report.Diagnostics, found[:room]...)
+			truncatedAt = Path(file)
+			continue
+		}
+		report.Diagnostics = append(report.Diagnostics, found...)
+	}
+	if truncatedAt != "" {
+		report.Diagnostics = append(report.Diagnostics,
+			diagnostic(truncatedAt, finding(fmt.Sprintf(runTruncationMessage, total, reportLimit, truncatedAt))))
 	}
 	return report
+}
+
+// fileFindings is one file's diagnostics, whether it could be read or not,
+// bounded so a single pathological file cannot carry a run away.
+func fileFindings(read FileReader, file Path, owners Owners) ([]goyze.Diagnostic, int) {
+	data, err := read(string(file))
+	if err != nil {
+		return []goyze.Diagnostic{unreadable(file, err)}, 1
+	}
+	found := fileDiagnostics(file, Source(data), owners)
+	held := len(found)
+	if held <= findingLimit {
+		return found, held
+	}
+	// Counted BEFORE the notice is appended: the notice is this analyzer's own
+	// bookkeeping, not something the file contains.
+	return append(found[:findingLimit],
+		diagnostic(file, finding(fmt.Sprintf(truncationMessage, held, findingLimit)))), held
 }
 
 // Unreadable is the finding for each tree the walk could not enter. A directory
