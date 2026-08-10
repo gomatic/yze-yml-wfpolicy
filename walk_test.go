@@ -131,3 +131,41 @@ func TestAnAliasResolvesToWhatItNames(t *testing.T) {
 		assert.Equal(t, 6+i, d.Line, "the finding lands where the reference was written, not on the shared anchor")
 	}
 }
+
+// TestAJobMayBeNamedEnvOrWith pins the one place a mapping's keys are the
+// AUTHOR's rather than GitHub's. `with` and `env` are GitHub's keys on a step
+// or a job; as a JOB ID they are the author's, and treating the job as an
+// author-named context silenced every step inside it — a whole-job evasion
+// available by renaming a job.
+func TestAJobMayBeNamedEnvOrWith(t *testing.T) {
+	t.Parallel()
+
+	diags := analyze(t, `
+jobs:
+  env:
+    steps:
+      - uses: o/a@main
+  with:
+    steps:
+      - uses: o/a@master
+  build:
+    steps:
+      - uses: o/a@develop
+`)
+
+	assert.Len(t, diags, 3, "a job is a job whatever it is called")
+}
+
+// TestAnInputNamedUsesIsStillSkippedInsideAJobNamedEnv pins that making the
+// exemption positional did not lose it: within such a job, `with:` on a step is
+// still the author's.
+func TestAnInputNamedUsesIsStillSkippedInsideAJobNamedEnv(t *testing.T) {
+	t.Parallel()
+
+	diags := analyze(
+		t,
+		"jobs:\n  env:\n    steps:\n      - uses: actions/x@v1\n        with:\n          uses: o/a@main\n",
+	)
+
+	assert.Empty(t, diags, "the step's inputs are the author's, even in a job called env")
+}

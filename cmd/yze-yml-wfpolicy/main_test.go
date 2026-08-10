@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"testing"
 
+	goyze "github.com/gomatic/go-yze"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -214,4 +215,29 @@ func TestOverlappingArgumentsReportEachWorkflowOnce(t *testing.T) {
 
 	require.Equal(t, 0, run([]string{dir, file, file}))
 	assert.Equal(t, 1, bytes.Count(buf.Bytes(), []byte("a ref that moves")))
+}
+
+// TestANamedWorkflowIsNotFilteredWhateverTheArgumentOrder pins the rule against
+// the ordering that broke it. One shared identity set let whichever argument
+// came first claim the file, so a directory listed before the named workflow
+// sent it through the ignore filter after all — the same two arguments, the
+// opposite order, the opposite verdict.
+func TestANamedWorkflowIsNotFilteredWhateverTheArgumentOrder(t *testing.T) {
+	dir := t.TempDir()
+	ignored := writeWorkflow(t, dir, ".github/workflows/ci.yml", pinned)
+
+	original := checkIgnore
+	checkIgnore = func(goyze.RepoDir, []string) (map[string]bool, error) {
+		return map[string]bool{ignored: true}, nil
+	}
+	t.Cleanup(func() { checkIgnore = original })
+
+	for name, args := range map[string][]string{
+		"directory first": {dir, ignored},
+		"named first":     {ignored, dir},
+	} {
+		buf := swapStdout(t)
+		require.Equal(t, 0, run(args), name)
+		assert.Contains(t, buf.String(), "ci.yml", "%s: the author asked for it by name", name)
+	}
 }

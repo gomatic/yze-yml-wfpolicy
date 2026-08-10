@@ -41,11 +41,13 @@ func TestAnOwnedActionMustTrackItsMajorTag(t *testing.T) {
 	}
 }
 
-// TestAnOwnedActionOnABranchIsNamedAsABranch pins the third case, which is the
-// one the whole fleet is actually in. `@main` is neither frozen nor a
-// deliberate upgrade path: it can be force-pushed and names no release, so
-// calling it a "pin" would describe it as the opposite of what it is.
-func TestAnOwnedActionOnABranchIsNamedAsABranch(t *testing.T) {
+// TestAnOwnedActionOnAMovingRefIsNamedAsOneNotAsABranch pins the third case,
+// which is the one the whole fleet is actually in. `@main` is neither frozen
+// nor a deliberate upgrade path, so calling it a "pin" would describe it as the
+// opposite of what it is — and calling it a BRANCH would contradict the
+// denylist's own reason for holding `latest`, which is conventionally a tag
+// that gets re-pointed.
+func TestAnOwnedActionOnAMovingRefIsNamedAsOneNotAsABranch(t *testing.T) {
 	t.Parallel()
 
 	owners := wfpolicy.Owners{"acme": true}
@@ -53,9 +55,15 @@ func TestAnOwnedActionOnABranchIsNamedAsABranch(t *testing.T) {
 	diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: acme/admin-tools@main\n")
 
 	require.Len(t, diags, 1)
-	assert.Contains(t, diags[0].Message, "a branch", "it rides a branch, it does not pin one")
-	assert.NotContains(t, diags[0].Message, "pins", "and the message never calls a branch a pin")
+	assert.Contains(t, diags[0].Message, "a ref that moves", "it rides a moving ref, it does not pin one")
+	assert.NotContains(t, diags[0].Message, "pins", "and the message never calls a moving ref a pin")
 	assert.Contains(t, diags[0].Message, "major tag")
+
+	// `latest` is in the same denylist and is conventionally a re-pointed TAG,
+	// so the wording must not call it a branch either.
+	tagged := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: acme/act@latest\n")
+	require.Len(t, tagged, 1)
+	assert.NotContains(t, tagged[0].Message, "a branch", "a re-pointed tag is not a branch")
 }
 
 // TestTheFloatRuleNamesTheRefTheAuthorShouldHaveWritten pins the fix in the
@@ -222,4 +230,38 @@ func TestAnOwnedReferenceWithNoRefNamesNothing(t *testing.T) {
 
 	require.Len(t, diags, 1, "an empty ref is not the major tag, so it is still reported")
 	assert.Contains(t, diags[0].Message, "is ours")
+}
+
+// TestAnOwnerEntryIsReducedToItsAccount pins the configuration surface against
+// the paste that makes it inert. A reference is attributed by its FIRST path
+// segment, so an entry of `owner/repo` matched nothing and said nothing — the
+// same silent inertness case sensitivity used to cause, by a different route.
+func TestAnOwnerEntryIsReducedToItsAccount(t *testing.T) {
+	t.Parallel()
+
+	source := "jobs:\n  b:\n    steps:\n      - uses: acme/act@v1.2.3\n"
+
+	for _, entry := range []string{"acme", "acme/act", "acme/act/sub", "  ACME/Act  "} {
+		owners := wfpolicy.ConfiguredOwners(func(string) string { return entry })
+		diags := analyzeFor(t, owners, source)
+		require.Len(t, diags, 1, "%q names the acme account", entry)
+		assert.Contains(t, diags[0].Message, "is ours", "%q", entry)
+	}
+
+	assert.Empty(t, analyzeFor(t, wfpolicy.ConfiguredOwners(func(string) string { return "/" }), source),
+		"an entry naming no account owns nothing")
+}
+
+// TestAZeroPaddedVersionIsNotSuggestedAsATag pins that the advice names a ref
+// somebody could actually publish: `@v02` is not one, so a version padded that
+// way must not be echoed back as the tag to use.
+func TestAZeroPaddedVersionIsNotSuggestedAsATag(t *testing.T) {
+	t.Parallel()
+
+	owners := wfpolicy.Owners{"acme": true}
+	diags := analyzeFor(t, owners, "jobs:\n  b:\n    steps:\n      - uses: acme/act@v02.1\n")
+
+	require.Len(t, diags, 1)
+	assert.NotContains(t, diags[0].Message, "`@v02`", "no such tag is published")
+	assert.Contains(t, diags[0].Message, "track the major tag")
 }

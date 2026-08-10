@@ -82,10 +82,15 @@ func FuzzDiagnostics(f *testing.F) {
 
 // reported is the ref a finding names, read back out of its message.
 func reported(message string) (string, bool) {
-	_, rest, found := strings.Cut(message, `resolves "`)
-	if !found {
-		return "", false
+	for _, verb := range []string{"resolves ", "pins ", "rides "} {
+		_, rest, found := strings.Cut(message, verb)
+		if !found {
+			continue
+		}
+		quoted, _, ok := strings.Cut(rest, `,`)
+		if ok {
+			return strings.Trim(quoted, `"`), true
+		}
 	}
-	ref, _, found := strings.Cut(rest, `"`)
-	return ref, found
+	return "", false
 }

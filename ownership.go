@@ -115,7 +115,7 @@ func majorOf(ref gitRef) (string, bool) {
 
 // majorPrefix reads the major version out of a pinned tag, with or without the
 // conventional leading v: `v2.19.1`, `2.3.4` and `v2.19` all belong to major 2.
-var majorPrefix = regexp.MustCompile(`^v?([0-9]+)\.`)
+var majorPrefix = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.`)
 
 // ConfiguredOwners is the owner list this process was configured with, read
 // from the environment. It is a function rather than a package variable so a
@@ -124,8 +124,13 @@ var majorPrefix = regexp.MustCompile(`^v?([0-9]+)\.`)
 func ConfiguredOwners(lookup func(string) string) Owners {
 	owners := Owners{}
 	for _, name := range strings.Split(lookup(ownersVariable), ",") {
-		if trimmed := strings.TrimSpace(name); trimmed != "" {
-			owners[Owner(strings.ToLower(trimmed))] = true
+		// Reduced to the ACCOUNT, because a reference is attributed by its
+		// first path segment: pasting `owner/repo` where an owner belongs
+		// matched nothing and said nothing, the same silent inertness that
+		// case sensitivity used to cause.
+		account, _, _ := strings.Cut(strings.TrimSpace(name), "/")
+		if account != "" {
+			owners[Owner(strings.ToLower(account))] = true
 		}
 	}
 	return owners

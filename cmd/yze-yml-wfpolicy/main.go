@@ -61,23 +61,39 @@ func fail(err error) int {
 // files beneath it, and any other path is taken verbatim.
 func workflowFiles(args []string) ([]string, error) {
 	var named, walked []string
-	seen := map[string]bool{}
+	// SEPARATE identity sets. Sharing one let whichever argument came first
+	// claim a file, so a directory listed before a named workflow put it in the
+	// walked list, where the ignore filter then deleted it — the same two
+	// arguments in the opposite order gave the opposite verdict.
+	isNamed, isWalked := map[string]bool{}, map[string]bool{}
 	for _, arg := range args {
 		found, isDir, err := expand(argument(arg))
 		if err != nil {
 			return nil, err
 		}
 		if isDir {
-			walked = appendUnseen(walked, seen, found)
+			walked = appendUnseen(walked, isWalked, found)
 			continue
 		}
 		// A file NAMED outright is analyzed verbatim. Passing it through the
 		// ignore filter answered a deliberate request with a silent clean pass
 		// — the filter exists to keep a WALK from claiming files the
 		// repository does not own, not to overrule an author who asked.
-		named = appendUnseen(named, seen, found)
+		named = appendUnseen(named, isNamed, found)
 	}
-	return append(named, goyze.Tracked(checkIgnore, walked)...), nil
+	return append(named, goyze.Tracked(checkIgnore, without(isNamed, walked))...), nil
+}
+
+// without drops the walked files already claimed by name, so a file reached
+// both ways is analyzed once, as the named file it was asked about.
+func without(named map[string]bool, walked []string) []string {
+	kept := make([]string, 0, len(walked))
+	for _, file := range walked {
+		if !named[canonical(filePath(file))] {
+			kept = append(kept, file)
+		}
+	}
+	return kept
 }
 
 // filePath is one discovered file, in the spelling the report will carry.

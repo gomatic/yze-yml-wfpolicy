@@ -1,0 +1,2 @@
+go test fuzz v1
+string("jobs:\n  env:\n    steps:\n      - uses: o/a@main\n")

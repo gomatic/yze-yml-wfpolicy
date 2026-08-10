@@ -67,15 +67,20 @@ const message = "`uses: %s` resolves %q, a ref that moves; pin an immutable tag 
 const ownedMessage = "`uses: %s` pins %q, but %s is ours; track the major tag (`@v%s`) instead — a pinned " +
 	"patch means a CVE fix or a gate change needs an edit in every repository that consumes it"
 
-// ownedBranchMessage formats the other owned-action defect: not frozen, but
-// riding a BRANCH. A branch can be force-pushed and names no release, so it is
-// neither the immutability a third-party pin gives nor the deliberate movement
-// a major tag gives — it is the worst of both.
+// ownedUnknownMessage formats an owned action pinned to something with no
+// major version to name — a commit SHA, or a ref that is not a version at all.
+// It advises the major tag without inventing one, because printing a number
+// derived from a commit hash would hand the author a ref that does not exist.
 const ownedUnknownMessage = "`uses: %s` pins %q, but %s is ours; track the major tag instead — a pinned commit " +
 	"means a CVE fix or a gate change needs an edit in every repository that consumes it"
 
-const ownedBranchMessage = "`uses: %s` rides %q, a branch, but %s is ours; track the major tag instead — a " +
-	"branch can be force-pushed and names no release, so it gives neither immutability nor a deliberate upgrade"
+// ownedBranchMessage formats the other owned-action defect: not frozen, but
+// riding a ref that MOVES. Such a ref names no release and can be re-pointed
+// under you, so it is neither the immutability a third-party pin gives nor the
+// deliberate movement a major tag gives — it is the worst of both.
+const ownedBranchMessage = "`uses: %s` rides %q, a ref that moves, but %s is ours; track the major tag " +
+	"instead — a moving ref names no release and can be re-pointed under you, so it gives neither immutability " +
+	"nor a deliberate upgrade"
 
 // usesKey is the workflow field naming the action a step runs.
 const usesKey = "uses"
@@ -143,7 +148,7 @@ func nextDocument(decoder *yaml.Decoder) (*yaml.Node, error) {
 // documentDiagnostics reports every moving-ref pin in one document.
 func documentDiagnostics(path Path, owners Owners, root *yaml.Node) []goyze.Diagnostic {
 	var diags []goyze.Diagnostic
-	walk(root, func(value *yaml.Node) {
+	walk(root, schemaKeys, func(value *yaml.Node) {
 		if diag, ok := pinDiagnostic(path, owners, value); ok {
 			diags = append(diags, diag)
 		}
