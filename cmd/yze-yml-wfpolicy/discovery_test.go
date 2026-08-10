@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -186,12 +187,68 @@ func TestTrackedFailsOpenWhenGitCannotAnswer(t *testing.T) {
 	assert.Contains(t, buf.String(), "ci.yml")
 }
 
-// TestIgnoreRootOfNoFilesIsTheWorkingDirectory pins the degenerate case: with
-// nothing found there is no repository to ask from, and the question must still
-// be well-formed rather than built from an empty path.
-func TestIgnoreRootOfNoFilesIsTheWorkingDirectory(t *testing.T) {
-	t.Parallel()
+// TestDiscoveryFollowsASymlinkedWorkflow pins that the walk and the named path
+// agree. The walk reports the LINK's own mode, so a symlinked workflow was
+// silently skipped by a directory scan while the very same command analyzed it
+// when named outright — one command, two answers about one repository.
+func TestDiscoveryFollowsASymlinkedWorkflow(t *testing.T) {
+	dir := t.TempDir()
+	target := writeWorkflow(t, dir, "real/ci.yml", pinned)
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".github", "workflows"), 0o750))
+	require.NoError(t, os.Symlink(target, filepath.Join(dir, ".github", "workflows", "link.yml")))
+	buf := swapStdout(t)
 
-	assert.Equal(t, repoDir("."), ignoreRoot(nil))
-	assert.Equal(t, repoDir(filepath.Join("a", "b")), ignoreRoot([]string{filepath.Join("a", "b", "ci.yml")}))
+	require.Equal(t, 0, run([]string{dir}))
+	assert.Contains(t, buf.String(), "link.yml")
+}
+
+// TestCanonicalDeduplicatesOneFileReachedTwoWays pins that identity is the FILE, not
+// the spelling: reached through a link and directly, or by two spellings of one
+// argument, it is one workflow with one set of findings.
+func TestCanonicalDeduplicatesOneFileReachedTwoWays(t *testing.T) {
+	dir := t.TempDir()
+	target := writeWorkflow(t, dir, "real/ci.yml", pinned)
+	link := filepath.Join(dir, "link.yml")
+	require.NoError(t, os.Symlink(target, link))
+	buf := swapStdout(t)
+
+	spelled := filepath.Join(filepath.Dir(target), ".", filepath.Base(target))
+	require.Equal(t, 0, run([]string{target, link, spelled}))
+	assert.Equal(t, 1, bytes.Count(buf.Bytes(), []byte("a ref that moves")))
+}
+
+// TestANamedWorkflowIsAnalyzedEvenWhenGitIgnoresIt pins the scope of the ignore
+// filter: it keeps a WALK from claiming files the repository does not own, and
+// it does not overrule an author who asked about one outright. Silently
+// answering a deliberate request with nothing is the result a gate must never
+// invent.
+func TestANamedWorkflowIsAnalyzedEvenWhenGitIgnoresIt(t *testing.T) {
+	dir := t.TempDir()
+	named := writeWorkflow(t, dir, "generated/action.yml", pinned)
+
+	original := checkIgnore
+	checkIgnore = func(repoDir, []string) (map[string]bool, error) {
+		return map[string]bool{named: true}, nil
+	}
+	t.Cleanup(func() { checkIgnore = original })
+	buf := swapStdout(t)
+
+	require.Equal(t, 0, run([]string{named}))
+	assert.Contains(t, buf.String(), "action.yml")
+}
+
+// TestCanonicalFallsBackToTheSpellingWhenItCannotResolve pins the arm taken
+// when a path cannot be resolved: it keeps its own spelling as its identity, so
+// the file is still analyzed rather than dropped for being unidentifiable.
+func TestCanonicalFallsBackToTheSpellingWhenItCannotResolve(t *testing.T) {
+	dir := t.TempDir()
+	file := writeWorkflow(t, dir, ".github/workflows/ci.yml", pinned)
+
+	original := evalSymlinks
+	evalSymlinks = func(string) (string, error) { return "", errors.New("cannot resolve") }
+	t.Cleanup(func() { evalSymlinks = original })
+	buf := swapStdout(t)
+
+	require.Equal(t, 0, run([]string{file}))
+	assert.Contains(t, buf.String(), "ci.yml")
 }

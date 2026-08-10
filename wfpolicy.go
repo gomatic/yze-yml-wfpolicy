@@ -151,35 +151,6 @@ func documentDiagnostics(path Path, owners Owners, root *yaml.Node) []goyze.Diag
 	return diags
 }
 
-// walk visits the value of every `uses:` key in the document, at any depth. The
-// key is looked for rather than the path to it, because a workflow spells
-// `uses` in three places — a step, a reusable-workflow job, and a composite
-// action's step — and enumerating those paths would silently miss whichever
-// shape GitHub adds next.
-func walk(node *yaml.Node, visit func(*yaml.Node)) {
-	switch node.Kind {
-	case yaml.MappingNode:
-		visitMapping(node, visit)
-	case yaml.DocumentNode, yaml.SequenceNode, yaml.ScalarNode, yaml.AliasNode:
-		// Only a mapping holds keys, so only a mapping can hold a `uses:` key.
-		// Every kind's children are still walked below.
-	}
-	for _, child := range node.Content {
-		walk(child, visit)
-	}
-}
-
-// visitMapping reports the `uses` values of one mapping's key/value pairs.
-// YAML stores a mapping as a flat alternating list, so the step of two is what
-// keeps keys and values from swapping places.
-func visitMapping(node *yaml.Node, visit func(*yaml.Node)) {
-	for i := 0; i+1 < len(node.Content); i += 2 {
-		if node.Content[i].Value == usesKey {
-			visit(node.Content[i+1])
-		}
-	}
-}
-
 // reference is the action a `uses:` value names, or the empty string when it
 // names none. An alias is FOLLOWED, because it carries the anchor's label as
 // its own value and comparing that label against the denylist is a one-line

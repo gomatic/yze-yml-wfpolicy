@@ -30,6 +30,9 @@ var absolutePath = filepath.Abs
 // from.
 type repoDir string
 
+// filePath is one path being asked about.
+type filePath string
+
 // ignoreLister reports which of the given paths git ignores, asked from within
 // the given directory.
 type ignoreLister func(root repoDir, paths []string) (map[string]bool, error)
@@ -108,6 +111,54 @@ func exitedCleanly(err error) error {
 	return err
 }
 
+// markIgnored records the paths git ignores in one repository. It FAILS OPEN
+// for that repository alone: one tree git cannot answer for must not disable
+// the filter over the others.
+func markIgnored(ignored map[string]bool, ignores ignoreLister, root repoDir, paths []string) {
+	found, err := ignores(root, paths)
+	if err != nil {
+		return
+	}
+	for path := range found {
+		ignored[path] = true
+	}
+}
+
+// repositoryRoot is the nearest ancestor of path that is a git checkout, or
+// the path's own directory when none is. Grouping by it is what makes a run
+// over several repositories correct: git answers only for the repository it is
+// asked from, and asked about a path outside it, it prints what it resolved and
+// then aborts — so one root for the whole list dropped half the answer and
+// silently kept the other half's ignored files.
+func repositoryRoot(path filePath) repoDir {
+	dir := filepath.Dir(string(path))
+	for {
+		if _, err := statPath(filepath.Join(dir, ".git")); err == nil {
+			return repoDir(dir)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return repoDir(filepath.Dir(string(path)))
+		}
+		dir = parent
+	}
+}
+
+// byRepository groups paths by the checkout they belong to, preserving the
+// order each group was first seen so the report stays stable.
+func byRepository(paths []string) ([]repoDir, map[repoDir][]string) {
+	var order []repoDir
+	groups := map[repoDir][]string{}
+	for _, path := range paths {
+		root := repositoryRoot(filePath(path))
+		if _, seen := groups[root]; !seen {
+			order = append(order, root)
+		}
+		groups[root] = append(groups[root], path)
+	}
+	return order, groups
+}
+
 // tracked drops the paths git ignores.
 //
 // It FAILS OPEN: a tree that is not a git repository, or a machine with no git,
@@ -115,10 +166,11 @@ func exitedCleanly(err error) error {
 // "ignore everything" — would turn a missing tool into a silent clean pass,
 // which is the one result a gate must never produce. This is the same policy
 // the yze suite applies to the Go side.
-func tracked(ignores ignoreLister, root repoDir, paths []string) []string {
-	ignored, err := ignores(root, paths)
-	if err != nil {
-		return paths
+func tracked(ignores ignoreLister, paths []string) []string {
+	order, groups := byRepository(paths)
+	ignored := map[string]bool{}
+	for _, root := range order {
+		markIgnored(ignored, ignores, root, groups[root])
 	}
 	kept := make([]string, 0, len(paths))
 	for _, path := range paths {

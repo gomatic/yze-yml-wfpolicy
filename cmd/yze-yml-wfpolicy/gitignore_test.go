@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -35,13 +36,28 @@ func TestIgnoreHelperProcess(_ *testing.T) {
 	os.Exit(code)
 }
 
+// gitCall records how the seam was invoked, so the argv is verified rather than
+// assumed: every earlier stub discarded it, leaving the flags, the working
+// directory and the framing unpinned — including a regression the code's own
+// comment says had already shipped once.
+type gitCall struct {
+	command *exec.Cmd
+	name    string
+	args    []string
+}
+
+// lastGitCall is what the most recent stubbed invocation was given.
+var lastGitCall gitCall
+
 // stubGit points the subprocess seam at this test binary, which answers with
 // the given output and exit status.
 func stubGit(t *testing.T, stdout string, code int) {
 	t.Helper()
 	original := execCommand
-	execCommand = func(_ string, _ ...string) *exec.Cmd {
+	execCommand = func(name string, args ...string) *exec.Cmd {
+		lastGitCall = gitCall{name: name, args: args}
 		command := exec.Command(os.Args[0], "-test.run=TestIgnoreHelperProcess")
+		lastGitCall.command = command
 		command.Env = append(os.Environ(),
 			helperEnabled+"=1",
 			"WFPOLICY_IGNORE_OUT="+stdout,
@@ -103,7 +119,7 @@ func TestGitCheckIgnoreSurfacesARealFailure(t *testing.T) {
 func TestAPartialAnswerIsNotAnAnswer(t *testing.T) {
 	stubGit(t, "/a/ignored.md\x01", 128)
 
-	_, err := gitCheckIgnore(".", []string{"/a/ignored.md", "/b/ignored.md"})
+	_, err := gitCheckIgnore(".", []string{"/a/ignored.yml", "/b/ignored.yml"})
 
 	require.Error(t, err, "output alongside a failure is a partial answer, and the caller must fail open")
 }
@@ -112,7 +128,7 @@ func TestAPartialAnswerIsNotAnAnswer(t *testing.T) {
 // such a path split into two questions and came back C-quoted, so the one file
 // git HAD answered about was the one the filter failed to drop.
 func TestAPathHoldingANewlineIsStillAsked(t *testing.T) {
-	odd := ".github/workflows/two\nlines.yml"
+	odd := ".github/workflows/ci/two\nlines.yml"
 	absolute, err := filepath.Abs(odd)
 	require.NoError(t, err)
 	stubGit(t, absolute+"\x01", 0)
@@ -150,4 +166,70 @@ func TestAbsolutePathFailureStillAsksAboutThePath(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, map[string]bool{"vendor/dep/action.yml": true}, ignored)
+}
+
+// TestGitIsAskedTheRightQuestionFromTheRightPlace pins the invocation itself.
+// The seam's stubs inspected nothing, so deleting the working directory — the
+// regression this file's own comment says "is how this first shipped" — passed
+// the whole suite, as did dropping -z or the excludes neutralisation.
+func TestGitIsAskedTheRightQuestionFromTheRightPlace(t *testing.T) {
+	stubGit(t, "", 1)
+	// A real directory: the seam runs the child THERE, which is the property
+	// under test, so a path that does not exist would fail for the wrong reason.
+	root := t.TempDir()
+
+	_, err := gitCheckIgnore(repoDir(root), []string{"a.yml"})
+
+	require.NoError(t, err)
+	assert.Equal(t, "git", lastGitCall.name)
+	assert.Contains(t, lastGitCall.args, "check-ignore")
+	assert.Contains(t, lastGitCall.args, "--stdin")
+	assert.Contains(t, lastGitCall.args, "-z", "the protocol is NUL-framed, so a path may contain a newline")
+	assert.Contains(t, lastGitCall.args, "core.excludesFile=/dev/null",
+		"a machine's own excludes are not the repository's answer")
+	assert.Contains(t, lastGitCall.args, "core.quotePath=false")
+	assert.Equal(t, root, lastGitCall.command.Dir, "asked from INSIDE the repository, not wherever the process started")
+}
+
+// TestEachRepositoryIsAskedSeparately pins the grouping. git answers only for
+// the repository it is asked from: given a path outside it, it prints what it
+// resolved and then aborts, so one root for the whole list dropped half the
+// answer and silently kept the other half's ignored files.
+func TestEachRepositoryIsAskedSeparately(t *testing.T) {
+	t.Parallel()
+
+	var asked []repoDir
+	ignores := func(root repoDir, paths []string) (map[string]bool, error) {
+		asked = append(asked, root)
+		found := map[string]bool{}
+		for _, p := range paths {
+			if strings.Contains(p, "ignored") {
+				found[p] = true
+			}
+		}
+		return found, nil
+	}
+
+	kept := tracked(ignores, []string{"/a/keep.yml", "/a/ignored.yml", "/b/keep.yml", "/b/ignored.yml"})
+
+	assert.Equal(t, []string{"/a/keep.yml", "/b/keep.yml"}, kept)
+	assert.Len(t, asked, 2, "one question per repository, not one for the whole list")
+}
+
+// TestMarkIgnoredMustNotDisableTheFilterForOtherRepositories pins that failing open is
+// scoped: a tree git cannot answer for must not turn the filter off everywhere.
+func TestMarkIgnoredMustNotDisableTheFilterForOtherRepositories(t *testing.T) {
+	t.Parallel()
+
+	ignores := func(root repoDir, _ []string) (map[string]bool, error) {
+		if strings.HasPrefix(string(root), "/a") {
+			return nil, errors.New("not a git repository")
+		}
+		return map[string]bool{"/b/ignored.yml": true}, nil
+	}
+
+	kept := tracked(ignores, []string{"/a/ignored.yml", "/b/ignored.yml", "/b/keep.yml"})
+
+	assert.Equal(t, []string{"/a/ignored.yml", "/b/keep.yml"}, kept,
+		"the unanswerable tree keeps everything; the answerable one is still filtered")
 }

@@ -32,12 +32,30 @@ func workflowFilesUnder(dir searchDir) ([]string, error) {
 			return prunedDir(walkRoot(root), entryPath(path), entryName(d.Name()))
 		// Only a regular file is read. A FIFO blocks forever on open, and a
 		// device or socket is not source in any case.
-		case d.Type().IsRegular() && isWorkflowFile(entryPath(path)):
+		case readableSource(entryPath(path), d) && isWorkflowFile(entryPath(path)):
 			files = append(files, path)
 		}
 		return nil
 	})
 	return files, err
+}
+
+// readableSource reports a path whose contents can be read as a workflow.
+//
+// A FIFO blocks forever on open, and a device is not source in any case. A
+// SYMLINK is FOLLOWED: publishing a workflow through a link is ordinary, and
+// the walk reports the link's own mode — so the walk silently skipped a file
+// that the very same command analyzed when it was named outright, and the two
+// entry points disagreed about the same repository.
+func readableSource(path entryPath, d fs.DirEntry) bool {
+	if d.Type().IsRegular() {
+		return true
+	}
+	if d.Type()&fs.ModeSymlink == 0 {
+		return false
+	}
+	info, err := statPath(string(path))
+	return err == nil && info.Mode().IsRegular()
 }
 
 // prunedDir decides whether to descend into one directory. The walk root is

@@ -15,13 +15,14 @@ import (
 
 // Injected collaborators, so the command is testable without real I/O.
 var (
-	osExit                = os.Exit
-	readFile              = os.ReadFile
-	statPath              = os.Stat
-	walkDir               = filepath.WalkDir
-	checkIgnore           = gitCheckIgnore
-	lookupEnv             = os.Getenv
-	stdout      io.Writer = os.Stdout
+	osExit                 = os.Exit
+	readFile               = os.ReadFile
+	statPath               = os.Stat
+	walkDir                = filepath.WalkDir
+	evalSymlinks           = filepath.EvalSymlinks
+	checkIgnore            = gitCheckIgnore
+	lookupEnv              = os.Getenv
+	stdout       io.Writer = os.Stdout
 )
 
 func main() { osExit(run(os.Args[1:])) }
@@ -57,25 +58,36 @@ func fail(err error) int {
 // workflowFiles expands each argument: a directory contributes the workflow
 // files beneath it, and any other path is taken verbatim.
 func workflowFiles(args []string) ([]string, error) {
-	var files []string
+	var named, walked []string
 	seen := map[string]bool{}
 	for _, arg := range args {
-		found, err := expand(argument(arg))
+		found, isDir, err := expand(argument(arg))
 		if err != nil {
 			return nil, err
 		}
-		files = appendUnseen(files, seen, found)
+		if isDir {
+			walked = appendUnseen(walked, seen, found)
+			continue
+		}
+		// A file NAMED outright is analyzed verbatim. Passing it through the
+		// ignore filter answered a deliberate request with a silent clean pass
+		// — the filter exists to keep a WALK from claiming files the
+		// repository does not own, not to overrule an author who asked.
+		named = appendUnseen(named, seen, found)
 	}
-	return tracked(checkIgnore, ignoreRoot(files), files), nil
+	return append(named, tracked(checkIgnore, walked)...), nil
 }
 
-// ignoreRoot is the directory the ignore question is asked from: the first
-// workflow's own directory, which is inside the repository being analyzed.
-func ignoreRoot(files []string) repoDir {
-	if len(files) == 0 {
-		return "."
+// canonical is the path with symlinks resolved, used ONLY as the identity of a
+// file. Deduplication keyed on the spelling reported one workflow twice when it
+// was reached two ways — through a link and directly, or by two spellings of
+// one argument — which doubles a count the ratchet is measured against.
+func canonical(path filePath) string {
+	resolved, err := evalSymlinks(string(path))
+	if err != nil {
+		return string(path)
 	}
-	return repoDir(filepath.Dir(files[0]))
+	return resolved
 }
 
 // appendUnseen adds the files not already collected, in the order they were
@@ -84,8 +96,9 @@ func ignoreRoot(files []string) repoDir {
 // twice doubles a count the soft-baseline ratchet is measured against.
 func appendUnseen(files []string, seen map[string]bool, found []string) []string {
 	for _, file := range found {
-		if !seen[file] {
-			seen[file] = true
+		identity := canonical(filePath(file))
+		if !seen[identity] {
+			seen[identity] = true
 			files = append(files, file)
 		}
 	}
@@ -93,19 +106,20 @@ func appendUnseen(files []string, seen map[string]bool, found []string) []string
 }
 
 // expand is one argument's workflow files.
-func expand(arg argument) ([]string, error) {
+func expand(arg argument) ([]string, bool, error) {
 	info, err := statPath(string(arg))
 	switch {
 	case err != nil:
-		return nil, err
+		return nil, false, err
 	case info.IsDir():
-		return workflowFilesUnder(searchDir(arg))
+		found, walkErr := workflowFilesUnder(searchDir(arg))
+		return found, true, walkErr
 	case !info.Mode().IsRegular():
 		// Naming a FIFO or a device outright skips the walk's guard, and
 		// reading one hangs the gate rather than failing it.
-		return nil, wfpolicy.ErrNotRegularFile.With(nil, "path", string(arg))
+		return nil, false, wfpolicy.ErrNotRegularFile.With(nil, "path", string(arg))
 	}
-	return []string{filepath.Clean(string(arg))}, nil
+	return []string{filepath.Clean(string(arg))}, false, nil
 }
 
 // searchDir is a directory argument expanded recursively to the workflow files
