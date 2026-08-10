@@ -2,13 +2,13 @@ package main
 
 import (
 	"bytes"
-	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
 
+	errs "github.com/gomatic/go-error"
 	goyze "github.com/gomatic/go-yze"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,7 +56,7 @@ func TestRunEmitsReportForDirectory(t *testing.T) {
 	buf := swapStdout(t)
 
 	require.Equal(t, 0, run([]string{dir}))
-	assert.Contains(t, buf.String(), "yze/wfpin")
+	assert.Contains(t, buf.String(), "yze/wfpolicy")
 	assert.Contains(t, buf.String(), "a ref that moves")
 }
 
@@ -69,7 +69,7 @@ func TestRunAcceptsExplicitFile(t *testing.T) {
 	buf := swapStdout(t)
 
 	require.Equal(t, 0, run([]string{file}))
-	assert.Contains(t, buf.String(), "yze/wfpin")
+	assert.Contains(t, buf.String(), "yze/wfpolicy")
 }
 
 // TestRunFailsOnMissingPath pins that a path that does not exist is an error,
@@ -81,36 +81,11 @@ func TestRunFailsOnMissingPath(t *testing.T) {
 // TestRunFailsWhenWalkErrors pins that a walk failure aborts rather than
 // reporting whatever it collected first.
 func TestRunFailsWhenWalkErrors(t *testing.T) {
-	original := walkDir
-	walkDir = func(_ string, _ fs.WalkDirFunc) error { return errors.New("walk failed") }
-	t.Cleanup(func() { walkDir = original })
+	original := files.WalkDir
+	files.WalkDir = func(string, fs.WalkDirFunc) error { return errWalkFailed }
+	t.Cleanup(func() { files.WalkDir = original })
 
 	assert.Equal(t, 1, run([]string{t.TempDir()}))
-}
-
-// TestRunFailsWhenTheWalkCallbackErrors pins the other half of walk failure: an
-// entry the walk could not stat aborts the run rather than being skipped, so
-// the gate never passes over a tree it read incompletely.
-func TestRunFailsWhenTheWalkCallbackErrors(t *testing.T) {
-	original := walkDir
-	walkDir = func(root string, fn fs.WalkDirFunc) error {
-		return fn(root, nil, errors.New("entry failed"))
-	}
-	t.Cleanup(func() { walkDir = original })
-
-	assert.Equal(t, 1, run([]string{t.TempDir()}))
-}
-
-// TestRunFailsWhenReadErrors pins that a file the analyzer cannot read aborts
-// the run — the gate never passes over a file it did not see.
-func TestRunFailsWhenReadErrors(t *testing.T) {
-	dir := t.TempDir()
-	file := writeWorkflow(t, dir, ".github/workflows/ci.yml", pinned)
-	original := readFile
-	readFile = func(string) ([]byte, error) { return nil, errors.New("read failed") }
-	t.Cleanup(func() { readFile = original })
-
-	assert.Equal(t, 1, run([]string{file}))
 }
 
 // TestRunReportsAnUnparseableFileWithoutFailingTheRun pins the containment at
@@ -128,10 +103,17 @@ func TestRunReportsAnUnparseableFileWithoutFailingTheRun(t *testing.T) {
 	assert.Contains(t, out, "a ref that moves", "the readable file keeps its findings")
 }
 
+// errWalkFailed and errWriteFailed stand in for a walk that cannot run and a
+// closed pipe.
+const (
+	errWalkFailed  errs.Const = "walk failed"
+	errWriteFailed errs.Const = "write failed"
+)
+
 // failingWriter refuses every write, standing in for a closed pipe.
 type failingWriter struct{}
 
-func (failingWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
+func (failingWriter) Write([]byte) (int, error) { return 0, errWriteFailed }
 
 // TestRunFailsWhenEncodeErrors pins that a report which cannot be written is a
 // failure: exiting zero would tell the runner a check passed when its result
@@ -190,10 +172,10 @@ func TestANamedNonRegularFileIsRefusedRatherThanRead(t *testing.T) {
 	pipe := filepath.Join(dir, "ci.yml")
 	require.NoError(t, syscall.Mkfifo(pipe, 0o600))
 
-	_, err := workflowFiles([]string{pipe})
+	_, err := discovery().Expand([]string{pipe})
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, wfpolicy.ErrNotRegularFile)
+	assert.ErrorIs(t, err, goyze.ErrNotRegularFile)
 	assert.Equal(t, 1, run([]string{pipe}), "and the command reports the failure")
 }
 
@@ -226,11 +208,11 @@ func TestANamedWorkflowIsNotFilteredWhateverTheArgumentOrder(t *testing.T) {
 	dir := t.TempDir()
 	ignored := writeWorkflow(t, dir, ".github/workflows/ci.yml", pinned)
 
-	original := checkIgnore
-	checkIgnore = func(goyze.RepoDir, []string) (map[string]bool, error) {
+	original := files.CheckIgnore
+	files.CheckIgnore = func(goyze.RepoDir, []string) (map[string]bool, error) {
 		return map[string]bool{ignored: true}, nil
 	}
-	t.Cleanup(func() { checkIgnore = original })
+	t.Cleanup(func() { files.CheckIgnore = original })
 
 	for name, args := range map[string][]string{
 		"directory first": {dir, ignored},
@@ -250,9 +232,9 @@ func TestCanonicalFallsBackWhenAPathCannotBeMadeAbsolute(t *testing.T) {
 	dir := t.TempDir()
 	file := writeWorkflow(t, dir, ".github/workflows/ci.yml", pinned)
 
-	original := absolutePath
-	absolutePath = func(string) (string, error) { return "", os.ErrInvalid }
-	t.Cleanup(func() { absolutePath = original })
+	original := files.Abs
+	files.Abs = func(string) (string, error) { return "", os.ErrInvalid }
+	t.Cleanup(func() { files.Abs = original })
 	buf := swapStdout(t)
 
 	require.Equal(t, 0, run([]string{file}))

@@ -33,9 +33,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Name is the analyzer's stable identifier — the suffix of its flat rule id and
+// Name is the analyzer's stable identifier. It MATCHES the repository suffix,
+// as every other analyzer in the family does — `yze-go-errconst` emits
+// `yze/errconst`. This one emitted `yze/wfpin` after the repository was renamed
+// to describe both of its opposite rules rather than only the pinning half, and
+// a rule id is the identifier a baseline, a ratchet and a `//nolint` all name.
+// It could be corrected only before publication, and it was. — the suffix of its flat rule id and
 // the key the yze suite catalogs it under.
-const Name = "wfpin"
+const Name = "wfpolicy"
 
 // Tool is the suite name stamped on every diagnostic.
 const Tool = "yze"
@@ -64,15 +69,23 @@ const message = "`uses: %s` resolves %q, a ref that moves; pin an immutable tag 
 // ownedMessage formats a pinned-own-action finding, which is the OPPOSITE
 // defect: an action this fleet publishes must track its major tag, so a fix
 // reaches every consumer on their next run.
-const ownedMessage = "`uses: %s` pins %q, but %s is ours; track the major tag (`@v%s`) instead — a pinned " +
+const ownedMessage = "`uses: %s` pins %q, but %s is ours; track the major tag (`@%s`) instead — a pinned " +
 	"patch means a CVE fix or a gate change needs an edit in every repository that consumes it"
 
-// ownedUnknownMessage formats an owned action pinned to something with no
-// major version to name — a commit SHA, or a ref that is not a version at all.
-// It advises the major tag without inventing one, because printing a number
-// derived from a commit hash would hand the author a ref that does not exist.
-const ownedUnknownMessage = "`uses: %s` pins %q, but %s is ours; track the major tag instead — a pinned commit " +
+// ownedCommitMessage formats an owned action frozen to a COMMIT, which has no
+// major version to track. The sentence names the real cost of a frozen commit:
+// nothing about it moves, so every consuming repository needs an edit.
+const ownedCommitMessage = "`uses: %s` pins %q, but %s is ours; track the major tag instead — a pinned commit " +
 	"means a CVE fix or a gate change needs an edit in every repository that consumes it"
+
+// ownedUnknownMessage formats an owned action pinned to a ref that is neither a
+// version nor a commit nor a branch — `@release-1.2`, `@refs/tags/v2.1.0`, an
+// empty ref. No major version can be read out of it, so none is suggested:
+// printing a number derived from a ref that carries none would hand the author
+// a tag that does not exist. It is deliberately NOT told it pinned a commit,
+// which it provably did not.
+const ownedUnknownMessage = "`uses: %s` pins %q, but %s is ours; that ref names no major version we can track — " +
+	"tag the release and reference the major tag, so a consumer picks up fixes without an edit"
 
 // ownedBranchMessage formats the other owned-action defect: not frozen, but
 // riding a ref that MOVES. Such a ref names no release and can be re-pointed
@@ -148,7 +161,7 @@ func nextDocument(decoder *yaml.Decoder) (*yaml.Node, error) {
 // documentDiagnostics reports every moving-ref pin in one document.
 func documentDiagnostics(path Path, owners Owners, root *yaml.Node) []goyze.Diagnostic {
 	var diags []goyze.Diagnostic
-	walk(root, schemaKeys, func(value *yaml.Node) {
+	walk(root, schemaKeys, visited{}, func(value *yaml.Node) {
 		if diag, ok := pinDiagnostic(path, owners, value); ok {
 			diags = append(diags, diag)
 		}

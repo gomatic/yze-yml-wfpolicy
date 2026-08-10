@@ -1,13 +1,12 @@
-package wfpolicy_test
+package wfpolicy
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
 	goyze "github.com/gomatic/go-yze"
-
-	wfpolicy "github.com/gomatic/yze-yml-wfpolicy"
 )
 
 // FuzzDiagnostics drives arbitrary text through the YAML parser and the pin
@@ -48,9 +47,9 @@ func FuzzDiagnostics(f *testing.F) {
 	}
 
 	f.Fuzz(func(t *testing.T, source string) {
-		diags, err := wfpolicy.Diagnostics("fuzz.yml", wfpolicy.Source(source), wfpolicy.Owners{"acme": true})
+		diags, err := Diagnostics("fuzz.yml", Source(source), Owners{"acme": true})
 		if err != nil {
-			if !errors.Is(err, wfpolicy.ErrParse) {
+			if !errors.Is(err, ErrParse) {
 				t.Fatalf("a failure must identify itself as a parse failure, got %v", err)
 			}
 			if diags != nil {
@@ -60,7 +59,7 @@ func FuzzDiagnostics(f *testing.F) {
 		}
 
 		for _, d := range diags {
-			if d.Rule != wfpolicy.Rule || d.Tool != "yze" {
+			if d.Rule != Rule || d.Tool != "yze" {
 				t.Fatalf("diagnostic must carry this rule's identity, got %q/%q", d.Tool, d.Rule)
 			}
 			if d.Line < 1 || d.Col < 1 {
@@ -71,25 +70,42 @@ func FuzzDiagnostics(f *testing.F) {
 			}
 			ref, ok := reported(d.Message)
 			if !ok {
-				t.Fatalf("a finding must name the branch it objects to: %s", d.Message)
+				t.Fatalf("a finding must name the ref it objects to: %s", d.Message)
 			}
-			if !strings.Contains(source, ref) {
-				t.Fatalf("a finding named %q, which is not in the source", ref)
+			// The ref must be one this rule KNOWS moves — not merely one that
+			// appears in the source text, which is what this used to assert and
+			// which is false: a YAML scalar is DECODED, so `"o/a@ma\u0069n"`
+			// yields the ref `main` that nothing in the file spells. The
+			// analyzer was right and the property was wrong, and the fuzzer
+			// found it in 26 seconds. This is the invariant that matters
+			// anyway: the rule must never claim a ref moves unless it is one of
+			// the refs it is willing to say that about.
+			if strings.Contains(d.Message, "a ref that moves") && !movingRefs[ref] {
+				t.Fatalf("a finding called %q a moving ref, which is not in the denylist", ref)
 			}
 		}
 	})
 }
 
 // reported is the ref a finding names, read back out of its message.
+//
+// The quoted span is taken with [strconv.QuotedPrefix] rather than by cutting at
+// the next comma. A ref may BE a comma — `uses: o/a@,` is legal text — and
+// cutting there split the message inside the quotes, so the assertion compared
+// against a string nothing had produced and failed on a finding that was
+// correct.
 func reported(message string) (string, bool) {
 	for _, verb := range []string{"resolves ", "pins ", "rides "} {
 		_, rest, found := strings.Cut(message, verb)
 		if !found {
 			continue
 		}
-		quoted, _, ok := strings.Cut(rest, `,`)
-		if ok {
-			return strings.Trim(quoted, `"`), true
+		quoted, err := strconv.QuotedPrefix(rest)
+		if err != nil {
+			continue
+		}
+		if unquoted, err := strconv.Unquote(quoted); err == nil {
+			return unquoted, true
 		}
 	}
 	return "", false

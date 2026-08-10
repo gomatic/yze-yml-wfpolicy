@@ -32,19 +32,70 @@ const unreadableMessage = "cannot be analyzed as a workflow: %v; the gate cannot
 // the filesystem.
 type FileReader func(path string) ([]byte, error)
 
+// finding is one diagnostic's rendered message.
+type finding string
+
+// SizeLimit is the largest file read, in bytes.
+//
+// A workflow is a few kilobytes; the largest in the fleet is under forty. A file
+// past this is a data dump, generated output, or a mistake, and reading it costs
+// its own size in memory for a rule that cannot apply — a 2 GB file reached 4.3
+// GB resident by BOTH entry points, because this analyzer had no bound at all
+// while both its siblings did. The limit is generous by orders of magnitude over
+// any real workflow, so it bounds the pathological case while still admitting
+// every file anyone wrote.
+const SizeLimit goyze.ByteCount = 128 << 10
+
 // Report runs the pin check over each file and aggregates the diagnostics into
-// the lean stickler-json report. A read failure aborts with ErrReadFile; a file
-// that is not YAML aborts with the wrapped ErrParse.
-func Report(read FileReader, files []string, owners Owners) (goyze.Report, error) {
+// the lean stickler-json report.
+//
+// It does not fail. A file that cannot be read, or that is not YAML, becomes one
+// finding against that file and the run continues — a single unreadable file
+// used to abort the run and return an empty report, so one bad file cost every
+// other file its findings, and a gate reporting nothing is indistinguishable
+// from a clean one. Both siblings already answered this way; this one did it for
+// parse failures and not for read failures, which is the same outage reached
+// through the one door still open.
+func Report(read FileReader, files []string, owners Owners) goyze.Report {
 	report := goyze.Report{}
 	for _, file := range files {
 		data, err := read(file)
 		if err != nil {
-			return goyze.Report{}, ErrReadFile.With(err, "path", file)
+			report.Diagnostics = append(report.Diagnostics, unreadable(Path(file), err))
+			continue
 		}
 		report.Diagnostics = append(report.Diagnostics, fileDiagnostics(Path(file), Source(data), owners)...)
 	}
-	return report, nil
+	return report
+}
+
+// Unreadable is the finding for each tree the walk could not enter. A directory
+// the gate cannot descend into is reported rather than passed over, so nothing
+// is lost in silence and the run still yields every other file's findings.
+func Unreadable(paths []string) []goyze.Diagnostic {
+	diags := make([]goyze.Diagnostic, 0, len(paths))
+	for _, path := range paths {
+		diags = append(diags, unreadable(Path(path), nil))
+	}
+	return diags
+}
+
+// unreadable is the finding for a path the analyzer could not read at all.
+func unreadable(file Path, cause error) goyze.Diagnostic {
+	return diagnostic(file, finding(fmt.Sprintf(unreadableMessage, ErrReadFile.With(cause, "path", string(file)))))
+}
+
+// diagnostic builds one finding at the head of a file.
+func diagnostic(file Path, message finding) goyze.Diagnostic {
+	return goyze.Diagnostic{
+		Tool:     Tool,
+		Rule:     Rule,
+		Path:     string(file),
+		Line:     1,
+		Col:      1,
+		Severity: goyze.SeverityError,
+		Message:  string(message),
+	}
 }
 
 // fileDiagnostics is one file's findings, with a parse failure reported as a
@@ -57,15 +108,7 @@ func Report(read FileReader, files []string, owners Owners) (goyze.Report, error
 func fileDiagnostics(file Path, source Source, owners Owners) []goyze.Diagnostic {
 	diags, err := Diagnostics(file, source, owners)
 	if err != nil {
-		return []goyze.Diagnostic{{
-			Tool:     Tool,
-			Rule:     Rule,
-			Path:     string(file),
-			Line:     1,
-			Col:      1,
-			Severity: goyze.SeverityError,
-			Message:  fmt.Sprintf(unreadableMessage, err),
-		}}
+		return []goyze.Diagnostic{diagnostic(file, finding(fmt.Sprintf(unreadableMessage, err)))}
 	}
 	return diags
 }

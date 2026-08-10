@@ -15,33 +15,16 @@ import (
 // gitRef is the ref half of a `uses:` value — what follows the `@`.
 type gitRef string
 
-// Owner is an account or organisation whose actions this fleet owns.
-type Owner string
-
-// Owners are the accounts whose actions must FLOAT. It is configuration rather
-// than a constant, and it has NO default, because which accounts are "ours" is
-// a property of whoever is running the check — never of this tool. Anyone can
-// use this analyzer; they list their own accounts and the rule inverts for
-// those. A list shipped in the tool would be wrong for every user but one, and
-// would publish the account names of the one it was right for.
-type Owners map[Owner]bool
-
-// ownersVariable is the environment variable the owner list is read from: a
-// comma-separated list of accounts. Empty leaves the float rule inert, so an
-// unconfigured run reports only the moving-ref half rather than inventing a
-// finding about a repository whose ownership it was told nothing about.
+// majorTag is the only ref an owned action may name: a bare major version,
+// never `@v2.19.1` and never a commit SHA.
 //
-// An environment variable is the whole configuration surface on purpose. The
-// value is the user's private business — it names the accounts they control —
-// so it must be settable from somewhere private, and it must reach a CI run
-// without ever appearing in a public repository. A repository or organisation
-// secret/variable passed through in a workflow's `env:` does both: the public
-// workflow names the VARIABLE, and the value stays wherever its owner put it.
-const ownersVariable = "YZE_WFPIN_OWNERS"
-
-// majorTag is the only ref an owned action may name: `@v2`, never `@v2.19.1`
-// and never a commit SHA.
-var majorTag = regexp.MustCompile(`^v[0-9]+$`)
+// The leading `v` is OPTIONAL, and zero-padding is refused, because both had to
+// agree with [majorPrefix] and neither did. `@v02` was accepted as compliant
+// while the advice half refused to ever suggest it — the repo's own test says
+// no such tag is published — and an account that tags `2.3.4` without the `v`
+// had NO compliant state at all: `@2` was reported for already complying, and
+// `@2.3.4` was told to write a `@v2` it never publishes.
+var majorTag = regexp.MustCompile(`^v?(0|[1-9][0-9]*)$`)
 
 // refDiagnostic is the message one `uses:` value earns, if any. The two rules
 // are exact opposites and which applies turns entirely on who owns the action:
@@ -69,10 +52,23 @@ func ownedDiagnostic(owner Owner, uses usesRef, ref gitRef) (string, bool) {
 		return fmt.Sprintf(ownedBranchMessage, uses, ref, owner), true
 	}
 	if major, ok := majorOf(ref); ok {
+		// The advice keeps the ref's OWN convention. Advising `@v2` to an
+		// account that publishes `2.3.4` hands them a tag they never cut, on
+		// exactly the reasoning that made the unknown-major branch exist.
 		return fmt.Sprintf(ownedMessage, uses, ref, owner, major), true
+	}
+	if commitSHA.MatchString(string(ref)) {
+		return fmt.Sprintf(ownedCommitMessage, uses, ref, owner), true
 	}
 	return fmt.Sprintf(ownedUnknownMessage, uses, ref, owner), true
 }
+
+// commitSHA is a ref that IS a commit — full or abbreviated. It is told apart
+// from an unrecognised ref because the two are different mistakes needing
+// different sentences: the frozen-commit message explains that a CVE fix would
+// need an edit in every consuming repository, which is true of a commit and
+// says nothing at all to somebody who wrote `@release-1.2`.
+var commitSHA = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 
 // ownedRef is the account and ref of an action this fleet owns, when the value
 // names one.
@@ -110,28 +106,14 @@ func majorOf(ref gitRef) (string, bool) {
 	if version == nil {
 		return "", false
 	}
-	return version[1], true
+	// The leading `v` is carried through EXACTLY as the ref wrote it. The tag
+	// suggested has to be one the account actually publishes, and an account
+	// that tags `2.3.4` does not publish `v2` — advising it hands the author a
+	// ref that does not exist, which is the very reason the no-major branch
+	// below refuses to invent one.
+	return version[1] + version[2], true
 }
 
 // majorPrefix reads the major version out of a pinned tag, with or without the
 // conventional leading v: `v2.19.1`, `2.3.4` and `v2.19` all belong to major 2.
-var majorPrefix = regexp.MustCompile(`^v?(0|[1-9][0-9]*)\.`)
-
-// ConfiguredOwners is the owner list this process was configured with, read
-// from the environment. It is a function rather than a package variable so a
-// test can set the variable and see the change, and so an unset variable is
-// plainly an empty list rather than a nil surprise.
-func ConfiguredOwners(lookup func(string) string) Owners {
-	owners := Owners{}
-	for _, name := range strings.Split(lookup(ownersVariable), ",") {
-		// Reduced to the ACCOUNT, because a reference is attributed by its
-		// first path segment: pasting `owner/repo` where an owner belongs
-		// matched nothing and said nothing, the same silent inertness that
-		// case sensitivity used to cause.
-		account, _, _ := strings.Cut(strings.TrimSpace(name), "/")
-		if account != "" {
-			owners[Owner(strings.ToLower(account))] = true
-		}
-	}
-	return owners
-}
+var majorPrefix = regexp.MustCompile(`^(v?)(0|[1-9][0-9]*)\.`)

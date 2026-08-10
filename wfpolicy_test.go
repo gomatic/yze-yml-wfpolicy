@@ -16,7 +16,7 @@ import (
 // half of the rule. It goes through DiagnosticsFor rather than Diagnostics on
 // purpose: Diagnostics reads the process environment, so a suite built on it
 // passed or failed according to what the developer happened to have exported —
-// verified, `YZE_WFPIN_OWNERS=actions go test` used to fail. A unit test may not
+// verified, `YZE_WFPOLICY_OWNERS=actions go test` used to fail. A unit test may not
 // depend on the world.
 func analyze(t *testing.T, source string) []goyze.Diagnostic {
 	t.Helper()
@@ -62,7 +62,7 @@ jobs:
 	require.Len(t, diags, 1)
 	assert.Contains(t, diags[0].Message, "owner/action@main")
 	assert.Contains(t, diags[0].Message, `"main"`)
-	assert.Equal(t, "yze/wfpin", diags[0].Rule)
+	assert.Equal(t, "yze/wfpolicy", diags[0].Rule)
 }
 
 // TestEveryConventionalBranchNameIsReported pins the denylist's membership.

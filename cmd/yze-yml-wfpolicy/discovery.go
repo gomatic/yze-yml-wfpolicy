@@ -1,98 +1,35 @@
 package main
 
-// Discovery decides which files this command hands to the analyzer: what GitHub
-// reads as a workflow or an action, which trees are somebody else's, and what is
-// not source at all.
+// What this command claims. Everything else about turning arguments into files
+// — the symlinked root, the identity of a path reached two ways, the tree that
+// cannot be read, the size bound — is the shared discovery's, because three
+// analyzers answering those questions separately answered them differently.
 
 import (
-	"io/fs"
 	"path/filepath"
 	"strings"
+
+	goyze "github.com/gomatic/go-yze"
 )
 
-// walkRoot is the directory a walk started from.
-type walkRoot string
-
-// entryPath is the path of one entry the walk visited.
-type entryPath string
-
-// entryName is a single path element — one directory's own name.
-type entryName string
-
-// workflowFilesUnder walks dir collecting every file GitHub reads as a workflow
-// or as a composite action.
-func workflowFilesUnder(dir searchDir) ([]string, error) {
-	root := filepath.Clean(string(dir))
-	var files []string
-	err := walkDir(root, func(path string, d fs.DirEntry, err error) error {
-		switch {
-		case err != nil:
-			return err
-		case d.IsDir():
-			return prunedDir(walkRoot(root), entryPath(path), entryName(d.Name()))
-		// Only a regular file is read. A FIFO blocks forever on open, and a
-		// device or socket is not source in any case.
-		case readableSource(entryPath(path), d) && isWorkflowFile(entryPath(path)):
-			files = append(files, path)
-		}
-		return nil
-	})
-	return files, err
-}
-
-// readableSource reports a path whose contents can be read as a workflow.
-//
-// A FIFO blocks forever on open, and a device is not source in any case. A
-// SYMLINK is FOLLOWED: publishing a workflow through a link is ordinary, and
-// the walk reports the link's own mode — so the walk silently skipped a file
-// that the very same command analyzed when it was named outright, and the two
-// entry points disagreed about the same repository.
-func readableSource(path entryPath, d fs.DirEntry) bool {
-	if d.Type().IsRegular() {
-		return true
-	}
-	if d.Type()&fs.ModeSymlink == 0 {
-		return false
-	}
-	info, err := statPath(string(path))
-	return err == nil && info.Mode().IsRegular()
-}
-
-// prunedDir decides whether to descend into one directory. The walk root is
-// never pruned: asking for a directory by name and being handed a silent clean
-// pass is worse than any tree this skips.
-func prunedDir(root walkRoot, path entryPath, name entryName) error {
-	if string(path) == string(root) {
-		return nil
-	}
-	if pruned(name) || nestedRepository(path) {
-		return fs.SkipDir
-	}
-	return nil
+// discovery is this command's file discovery: the shared walk, told what a
+// workflow is and whose trees to skip.
+func discovery() goyze.Discovery {
+	return goyze.Discovery{Files: files, Claims: isWorkflowFile, Prunes: pruned}
 }
 
 // pruned reports the trees that hold somebody else's code. A dependency ships
 // its own workflows, and reporting them tells this repository to fix a pin it
 // does not own — three such findings turned up in node_modules the first time
-// this walked a real checkout. `.git` holds this repository's own object
-// store, not its source. `.github` is deliberately NOT pruned despite being
-// hidden: it is the only directory a workflow can live in.
-func pruned(name entryName) bool {
+// this walked a real checkout. `.github` is deliberately NOT pruned despite
+// being hidden: it is the only directory a workflow can live in. `.git` and
+// nested checkouts are the shared walk's business, not this list's.
+func pruned(name goyze.DirName) bool {
 	switch name {
-	case ".git", "node_modules", "vendor", "testdata":
+	case "node_modules", "vendor", "testdata":
 		return true
 	}
 	return false
-}
-
-// nestedRepository reports a directory that is its own git checkout — a
-// submodule, or a sibling repository sitting inside this tree. Its workflows
-// belong to that repository and are gated by that repository's own run;
-// reporting them here asks an author to fix a file this checkout does not own,
-// which is the same mistake as reporting a vendored dependency.
-func nestedRepository(path entryPath) bool {
-	_, err := statPath(filepath.Join(string(path), ".git"))
-	return err == nil
 }
 
 // workflowDir is the only directory GitHub reads a workflow from.
@@ -106,12 +43,12 @@ var workflowDir = filepath.Join(".github", "workflows")
 // referenced by directory, so this is deliberately not anchored anywhere.
 var compositeNames = map[string]bool{"action.yml": true, "action.yaml": true}
 
-// isWorkflowFile reports a path GitHub would read as a workflow or as an
-// action definition. Both are read because both spell `uses:` and both run
-// with the calling job's credentials — a composite action pinned to a branch
-// is the same supply-chain hole as a workflow step pinned to one, and scanning
-// only workflows left the fleet's own composite actions unchecked.
-func isWorkflowFile(path entryPath) bool {
+// isWorkflowFile reports a path GitHub would read as a workflow or as an action
+// definition. Both are read because both spell `uses:` and both run with the
+// calling job's credentials — a composite action pinned to a branch is the same
+// supply-chain hole as a workflow step pinned to one, and scanning only
+// workflows left the fleet's own composite actions unchecked.
+func isWorkflowFile(path goyze.FilePath) bool {
 	base := filepath.Base(string(path))
 	if compositeNames[base] {
 		return true
