@@ -242,3 +242,39 @@ func TestAnAtPrefixedAccountIsStillAnAccount(t *testing.T) {
 		assert.True(t, owners["acme"], "%q names the acme account", spelling)
 	}
 }
+
+// TestConfiguredOwnersAsksForTheDocumentedVariable names the environment
+// variable as a LITERAL, because it is a published interface: it appears in the
+// docs, in every consumer's CI configuration, and in whatever private place its
+// value is kept. Renaming the constant is a breaking change for every user, and
+// the break is silent — the float rule simply goes inert — so the name is pinned
+// here rather than left to agree with itself.
+func TestConfiguredOwnersAsksForTheDocumentedVariable(t *testing.T) {
+	t.Parallel()
+
+	asked := []string{}
+	owners := wfpolicy.ConfiguredOwners(func(name string) string {
+		asked = append(asked, name)
+		if name == "YZE_WFPOLICY_OWNERS" {
+			return "acme"
+		}
+		return ""
+	})
+
+	assert.Equal(t, []string{"YZE_WFPOLICY_OWNERS"}, asked, "one variable, spelled exactly this way")
+	assert.Equal(t, wfpolicy.Owners{"acme": true}, owners)
+}
+
+// TestAnEntryNamingNoAccountIsNotAnOwner asserts on the owner LIST rather than
+// on what the analyzer then does with it. Asked through a workflow the claim
+// could not fail: the fixture's account is `acme` either way, so an empty entry
+// added beside it changed nothing observable. It is observable here — and an
+// empty owner is not inert, it makes `uses: /repo@main` "ours".
+func TestAnEntryNamingNoAccountIsNotAnOwner(t *testing.T) {
+	t.Parallel()
+
+	for _, value := range []string{"/", "@", ",", " ", "@/"} {
+		assert.Equal(t, wfpolicy.Owners{}, wfpolicy.ConfiguredOwners(func(string) string { return value }),
+			"%q names no account", value)
+	}
+}

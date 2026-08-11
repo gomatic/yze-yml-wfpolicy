@@ -198,3 +198,45 @@ func TestAMatrixHoldsTheAuthorsOwnKeys(t *testing.T) {
 		"    steps:\n      - uses: actions/checkout@main\n"
 	assert.Len(t, analyzeFor(t, nil, genuine), 1, "and a real step beside it is still read")
 }
+
+// TestAMappingsKeysAndValuesNeverSwapPlaces pins the step of two. YAML stores a
+// mapping as one flat alternating list, so walking it one entry at a time pairs
+// each VALUE with the following KEY: a document whose value happens to read
+// "uses" would then take the next key as its action reference and report a
+// finding about a string that is not one.
+func TestAMappingsKeysAndValuesNeverSwapPlaces(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, analyze(t, "a: uses\no/a@main: x\n"),
+		"the value `uses` is a value; the key beside it is not its reference")
+
+	diags := analyze(t, "uses: o/a@main\nb: c\n")
+	assert.Len(t, diags, 1, "and a real key/value pair is still read")
+}
+
+// TestAnAuthorNamedOutputIsNotAnActionReference pins the key that was missing
+// from the exempt set and is reachable in ordinary syntax. `jobs.<id>.outputs`
+// holds names the AUTHOR chose and takes scalar values, so an output called
+// `uses` is a legal workflow — and it earned a finding whose only remedy was to
+// rename a variable for the linter.
+func TestAnAuthorNamedOutputIsNotAnActionReference(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, analyze(t, "jobs:\n  resolve:\n    outputs:\n      uses: actions/checkout@main\n"),
+		"an output named uses is an output, not an action GitHub resolves")
+
+	assert.Len(t, analyze(t, "jobs:\n  resolve:\n    steps:\n      - uses: actions/checkout@main\n"), 1,
+		"and a step in the same job is still read")
+}
+
+// TestEveryAuthorNamedContextIsExempt pins the whole set at once, in both
+// directions. Each of these keys holds names the author chose, so a `uses`
+// among them is a field called uses; a step beside it is still an action.
+func TestEveryAuthorNamedContextIsExempt(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"with", "env", "secrets", "matrix", "outputs", "inputs", "services"} {
+		assert.Empty(t, analyze(t, "jobs:\n  b:\n    "+key+":\n      uses: o/a@main\n"),
+			"%s holds the author's own names", key)
+	}
+}

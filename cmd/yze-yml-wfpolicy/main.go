@@ -23,10 +23,9 @@ import (
 // had no seam for the symlinked walk root it therefore did not resolve, and none
 // for the size bound it therefore did not have.
 var (
-	osExit              = os.Exit
-	files               = goyze.OSFileSystem()
-	lookupEnv           = os.Getenv
-	stdout    io.Writer = os.Stdout
+	osExit           = os.Exit
+	files            = goyze.OSFileSystem()
+	stdout io.Writer = os.Stdout
 )
 
 func main() { osExit(run(os.Args[1:])) }
@@ -41,13 +40,10 @@ func run(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	// The environment is read HERE, at the one boundary where ambient state is
-	// visible, and handed to the library as a value.
-	//
 	// Report cannot fail: an unreadable or unparseable file becomes a finding
 	// against that file rather than the run's error, so one bad file can never
 	// empty the report.
-	report := wfpolicy.Report(readFile, found.Files, wfpolicy.ConfiguredOwners(lookupEnv))
+	report := wfpolicy.Report(readFile, found.Files, configuredOwners())
 	report.Diagnostics = append(wfpolicy.Unreadable(found.Unreadable), report.Diagnostics...)
 	if err := json.NewEncoder(stdout).Encode(report); err != nil {
 		return fail(err)

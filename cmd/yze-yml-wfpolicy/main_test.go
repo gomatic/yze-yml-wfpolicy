@@ -16,6 +16,13 @@ import (
 	wfpolicy "github.com/gomatic/yze-yml-wfpolicy"
 )
 
+// realLookupEnv is the command's OWN environment reader, captured at package
+// initialisation — before [TestMain] replaces it. A test that wants the real
+// wiring has to restore THIS, not assign os.Getenv itself: assigning it would
+// re-create the wiring under test, so unwiring line by line in main.go would
+// leave every test green.
+var realLookupEnv = lookupEnv
+
 // TestMain neutralises the one ambient input this command has. The owner list
 // is deliberately read from the environment at this boundary, so every test
 // here would otherwise pass or fail according to what the developer exported —

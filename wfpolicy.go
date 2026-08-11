@@ -97,22 +97,6 @@ const ownedBranchMessage = "`uses: %s` rides %q, a ref that moves, but %s is our
 // usesKey is the workflow field naming the action a step runs.
 const usesKey = "uses"
 
-// movingRefs are the refs that MOVE by construction — branches, the symbolic
-// HEAD, and `latest`, which is conventionally a tag that is re-pointed rather
-// than a branch. The set is a denylist on purpose: every other ref is presumed
-// fixed, because telling an immutable tag from a re-pointed one is not
-// decidable from the text, and a gate that guesses is a gate that gets
-// switched off.
-var movingRefs = map[string]bool{
-	"main":    true,
-	"master":  true,
-	"HEAD":    true,
-	"develop": true,
-	"dev":     true,
-	"trunk":   true,
-	"latest":  true,
-}
-
 // Diagnostics reports every action reference that should not be where it is:
 // a moving ref on somebody else's action, and a frozen or branch ref on one of
 // the runner's own. path is stamped on each diagnostic's location.
@@ -229,28 +213,4 @@ func pinDiagnostic(path Path, owners Owners, value *yaml.Node) (goyze.Diagnostic
 		Severity: goyze.SeverityError,
 		Message:  text,
 	}, true
-}
-
-// containerScheme marks a `uses:` value naming a container image rather than an
-// action repository. Its `@` introduces an image digest or tag, which is not a
-// git ref, so reading one would tell an author their image tag is a branch.
-const containerScheme = "docker://"
-
-// movingRef is the ref a `uses:` value resolves, when it resolves one. A value
-// with no `@` names a local action, which carries no ref to move, and a
-// container reference names no git ref at all.
-func movingRef(uses usesRef) (string, bool) {
-	// Trimmed FIRST. YAML preserves the space inside a quoted scalar, and
-	// testing the prefixes before trimming meant a single leading space turned
-	// a container image into a git ref and a local action into a remote one —
-	// each producing a finding the doc says this rule never makes.
-	trimmed := strings.TrimSpace(string(uses))
-	if strings.HasPrefix(trimmed, containerScheme) || strings.HasPrefix(trimmed, ".") {
-		return "", false
-	}
-	_, ref, found := strings.Cut(trimmed, "@")
-	if !found {
-		return "", false
-	}
-	return ref, movingRefs[ref]
 }

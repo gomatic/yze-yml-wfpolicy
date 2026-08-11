@@ -140,11 +140,28 @@ func visitMapping(node *yaml.Node, keys keyOwner, seen visited, visit func(*yaml
 
 // authored are the workflow keys whose CHILD keys are named by the author
 // rather than by GitHub. Nothing inside them is a schema field.
-// `secrets` and `matrix` are here for the same reason as `with` and `env`: their
-// keys are secret names and matrix dimensions the AUTHOR chose, so a `uses`
-// among them is an input named uses that GitHub never resolves — a finding
-// nobody can act on.
-var authored = map[string]bool{"with": true, "env": true, "secrets": true, "matrix": true}
+//
+// Every entry is here for the same reason: its keys are names the AUTHOR chose —
+// inputs, environment variables, secrets, matrix dimensions, outputs, service
+// ids — so a `uses` among them is a field called uses, which GitHub never
+// resolves as an action. Reporting one is a finding nobody can act on, because
+// the only way to satisfy it is to rename a variable for the linter's benefit.
+//
+// `outputs` was the missing one and it is reachable in ordinary syntax: an
+// output named `uses` under `jobs.<id>.outputs` takes a scalar value, so
+// `uses: actions/checkout@main` there is a legal workflow that earned a finding.
+// `inputs` and `services` complete the set — a composite action declares inputs
+// and a job declares service containers, both keyed by whatever the author
+// picked.
+var authored = map[string]bool{
+	"with":     true,
+	"env":      true,
+	"secrets":  true,
+	"matrix":   true,
+	"outputs":  true,
+	"inputs":   true,
+	"services": true,
+}
 
 // jobsKey introduces the one mapping whose KEYS the author chooses. A job may
 // be called `env`, and skipping it as an author-named context silenced every

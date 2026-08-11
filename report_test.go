@@ -128,7 +128,11 @@ func TestTheReportIsBoundedByFileAndByRun(t *testing.T) {
 
 	report := wfpolicy.Report(reader(contents), files, nil)
 
-	assert.LessOrEqual(t, len(report.Diagnostics), 10_001, "the run is bounded")
+	// EXACTLY the cap plus the notice that stands for the rest. Asserting only
+	// an upper bound left the cap's VALUE unpinned — it could be halved, or
+	// quartered, and this test would still pass while every run silently lost
+	// findings it used to report.
+	assert.Len(t, report.Diagnostics, 10_001, "the run is bounded at its stated cap")
 	last := report.Diagnostics[len(report.Diagnostics)-1]
 	assert.Contains(t, last.Message, "onward are omitted", "and says so rather than passing over it")
 	assert.Contains(t, last.Message, "18000 pin findings", "naming the true total, not the reported one")
@@ -146,6 +150,46 @@ func TestOneCrowdedFileIsBoundedOnItsOwn(t *testing.T) {
 
 	require.Len(t, report.Diagnostics, 1001)
 	assert.Contains(t, report.Diagnostics[1000].Message, "1500 pin findings in this file")
+}
+
+// TestAFileExactlyAtItsCapIsNotTruncated pins the boundary itself. A file with
+// exactly as many findings as the cap allows has lost nothing, so appending a
+// notice saying "1000 findings, of which 1000 are reported" tells a reader
+// something was withheld when nothing was — and the same off-by-one at the other
+// end would drop a real finding to make room for a notice about it.
+func TestAFileExactlyAtItsCapIsNotTruncated(t *testing.T) {
+	t.Parallel()
+	atCap := "jobs:\n  b:\n    steps:\n" + strings.Repeat("      - uses: o/a@main\n", 1000)
+
+	report := wfpolicy.Report(reader(map[string]string{"w.yml": atCap}), []string{"w.yml"}, nil)
+
+	require.Len(t, report.Diagnostics, 1000, "every finding, and no notice")
+	for _, diag := range report.Diagnostics {
+		assert.NotContains(t, diag.Message, "of which", "nothing was withheld, so nothing says it was")
+	}
+}
+
+// TestARunExactlyAtItsCapIsNotTruncated is the same boundary at the run level.
+// Ten files of a thousand findings each fill the run's allowance exactly; the
+// last one fits, so there is nothing to omit and no file to name as the point
+// where omission began.
+func TestARunExactlyAtItsCapIsNotTruncated(t *testing.T) {
+	t.Parallel()
+	atCap := "jobs:\n  b:\n    steps:\n" + strings.Repeat("      - uses: o/a@main\n", 1000)
+	files := make([]string, 0, 10)
+	contents := map[string]string{}
+	for i := range 10 {
+		name := fmt.Sprintf("w%02d.yml", i)
+		files = append(files, name)
+		contents[name] = atCap
+	}
+
+	report := wfpolicy.Report(reader(contents), files, nil)
+
+	require.Len(t, report.Diagnostics, 10_000, "the run is full, and full is not over")
+	for _, diag := range report.Diagnostics {
+		assert.NotContains(t, diag.Message, "onward are omitted", "nothing was omitted")
+	}
 }
 
 // TestTheLibraryRefusesAFileTooLargeToBeAWorkflow pins the bound in the LIBRARY.

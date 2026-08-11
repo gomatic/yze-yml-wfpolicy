@@ -8,23 +8,8 @@ package wfpolicy
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 )
-
-// gitRef is the ref half of a `uses:` value — what follows the `@`.
-type gitRef string
-
-// majorTag is the only ref an owned action may name: a bare major version,
-// never `@v2.19.1` and never a commit SHA.
-//
-// The leading `v` is OPTIONAL, and zero-padding is refused, because both had to
-// agree with [majorPrefix] and neither did. `@v02` was accepted as compliant
-// while the advice half refused to ever suggest it — the repo's own test says
-// no such tag is published — and an account that tags `2.3.4` without the `v`
-// had NO compliant state at all: `@2` was reported for already complying, and
-// `@2.3.4` was told to write a `@v2` it never publishes.
-var majorTag = regexp.MustCompile(`^v?(0|[1-9][0-9]*)$`)
 
 // refDiagnostic is the message one `uses:` value earns, if any. The two rules
 // are exact opposites and which applies turns entirely on who owns the action:
@@ -55,7 +40,12 @@ func ownedDiagnostic(owner Owner, uses usesRef, ref gitRef) (string, bool) {
 		return fmt.Sprintf(ownedCommitMessage, uses, ref, owner), true
 	case majorTag.MatchString(string(ref)):
 		return "", false
-	case movingRefs[string(ref)]:
+	case isMovingRef(ref):
+		// The SAME question the other half asks, asked through the same
+		// predicate. Reading the denylist directly here meant the two halves
+		// could answer differently about one ref, and they did: a fully
+		// qualified `refs/heads/main` was a moving ref for a third party and a
+		// ref that "names no major version" for us.
 		return fmt.Sprintf(ownedBranchMessage, uses, ref, owner), true
 	}
 	if major, ok := majorOf(ref); ok {
@@ -66,13 +56,6 @@ func ownedDiagnostic(owner Owner, uses usesRef, ref gitRef) (string, bool) {
 	}
 	return fmt.Sprintf(ownedUnknownMessage, uses, ref, owner), true
 }
-
-// commitSHA is a ref that IS a commit — full or abbreviated. It is told apart
-// from an unrecognised ref because the two are different mistakes needing
-// different sentences: the frozen-commit message explains that a CVE fix would
-// need an edit in every consuming repository, which is true of a commit and
-// says nothing at all to somebody who wrote `@release-1.2`.
-var commitSHA = regexp.MustCompile(`^[0-9a-f]{7,40}$`)
 
 // ownedRef is the account and ref of an action this fleet owns, when the value
 // names one.
@@ -100,24 +83,3 @@ func ownedRef(owners Owners, uses usesRef) (Owner, gitRef, bool) {
 	}
 	return Owner(owner), gitRef(ref), true
 }
-
-// majorOf is the major version a pinned ref belongs to, reporting whether it
-// has one at all. A commit SHA does not, and neither does a ref that is not a
-// version — printing a literal "vN" into an instruction that tells an author
-// which ref to write handed them something that is not a ref.
-func majorOf(ref gitRef) (string, bool) {
-	version := majorPrefix.FindStringSubmatch(string(ref))
-	if version == nil {
-		return "", false
-	}
-	// The leading `v` is carried through EXACTLY as the ref wrote it. The tag
-	// suggested has to be one the account actually publishes, and an account
-	// that tags `2.3.4` does not publish `v2` — advising it hands the author a
-	// ref that does not exist, which is the very reason the no-major branch
-	// below refuses to invent one.
-	return version[1] + version[2], true
-}
-
-// majorPrefix reads the major version out of a pinned tag, with or without the
-// conventional leading v: `v2.19.1`, `2.3.4` and `v2.19` all belong to major 2.
-var majorPrefix = regexp.MustCompile(`^(v?)(0|[1-9][0-9]*)\.`)
