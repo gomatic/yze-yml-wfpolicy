@@ -60,19 +60,14 @@ func ownedDiagnostic(owner Owner, uses usesRef, ref gitRef) (string, bool) {
 // ownedRef is the account and ref of an action this fleet owns, when the value
 // names one.
 func ownedRef(owners Owners, uses usesRef) (Owner, gitRef, bool) {
-	trimmed := strings.TrimSpace(string(uses))
-	// Checked on the WHOLE value, before the split: cutting `docker://img@tag`
-	// at its first `@` yields the owner `docker:`, so a guard applied to that
-	// could only ever fire for an owner list that literally contained
-	// `docker:` — it was unreachable in every real configuration.
-	if strings.HasPrefix(trimmed, containerScheme) || strings.HasPrefix(trimmed, ".") {
+	// Read through the SAME split as the other half — see [repositoryAndRef].
+	// Each kept its own copy of these decisions, and nothing made them agree
+	// except that somebody wrote them the same way twice.
+	repo, ref, names := repositoryAndRef(uses)
+	if !names {
 		return "", "", false
 	}
-	repo, ref, found := strings.Cut(trimmed, "@")
-	if !found {
-		return "", "", false
-	}
-	owner, _, _ := strings.Cut(repo, "/")
+	owner, _, _ := strings.Cut(string(repo), "/")
 	// FOLDED. GitHub resolves an account name case-insensitively — `Actions/
 	// Checkout` IS `actions/checkout` — so a mis-cased reference ran the same
 	// action while getting the OPPOSITE rule, and a mis-cased entry in the
@@ -81,5 +76,5 @@ func ownedRef(owners Owners, uses usesRef) (Owner, gitRef, bool) {
 	if !owners[Owner(strings.ToLower(owner))] {
 		return "", "", false
 	}
-	return Owner(owner), gitRef(ref), true
+	return Owner(owner), ref, true
 }

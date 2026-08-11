@@ -207,7 +207,12 @@ func TestANamedNonRegularFileIsRefusedRatherThanRead(t *testing.T) {
 // gate over a repository no analyzer ever looked at.
 func TestARunWithNoPathsIsAFailure(t *testing.T) {
 	assert.Equal(t, 1, run(nil))
-	assert.ErrorIs(t, wfpolicy.ErrNoPaths.With(nil), wfpolicy.ErrNoPaths)
+	// The error the CODE produces, not one the assertion builds. Asserting that
+	// `ErrNoPaths.With(nil)` matches `ErrNoPaths` exercises the error helper and
+	// holds whatever run returns — swapping this failure's sentinel for any
+	// other left the whole suite green, in all three of these analyzers.
+	assert.ErrorIs(t, report(nil), wfpolicy.ErrNoPaths)
+	assert.ErrorIs(t, report([]string{}), wfpolicy.ErrNoPaths)
 }
 
 // TestOverlappingArgumentsReportEachWorkflowOnce pins deduplication: a runner

@@ -134,3 +134,33 @@ func TestBothHalvesAgreeAFullyQualifiedBranchIsABranch(t *testing.T) {
 	assert.Contains(t, diags[0].Message, "a ref that moves", "ours rides a branch, and is told so")
 	assert.NotContains(t, diags[0].Message, "names no major version")
 }
+
+// TestOneSplitAnswersForBothHalvesOfTheRule names repositoryAndRef and pins that
+// it is the only reader of a `uses:` value. Each half of the analyzer kept its
+// own copy of the same three decisions — trim, refuse a container or a local
+// path, cut at the first `@` — and nothing made them agree except that somebody
+// wrote them the same way twice. This package has already paid for that drift
+// once, in the `@` they cut at.
+func TestOneSplitAnswersForBothHalvesOfTheRule(t *testing.T) {
+	t.Parallel()
+
+	for name, uses := range map[string]string{
+		"container":        "docker://alpine@3.20",
+		"container spaced": `" docker://alpine@latest"`,
+		"local":            "./.github/actions/x@main",
+		"local spaced":     `" ./.github/actions/x@main"`,
+		"no ref":           "third/party",
+	} {
+		assert.Empty(t, analyzeFor(t, wfpolicy.Owners{}, step(uses)),
+			"%s: names no git ref, for the third-party half", name)
+		assert.Empty(t, analyzeFor(t, wfpolicy.Owners{"third": true, "docker:": true}, step(uses)),
+			"%s: and none for the owned half either", name)
+	}
+
+	// The same value, read by each half, yields the same ref.
+	assert.Empty(t, analyzeFor(t, wfpolicy.Owners{}, step(`" third/party@v1@main"`)),
+		"the ref is `v1@main`, which is no branch this rule knows")
+	owned := analyzeFor(t, ourOwners, step(`" acme/act@v1@main"`))
+	require.Len(t, owned, 1)
+	assert.Contains(t, owned[0].Message, "v1@main", "and the owned half reads the same one")
+}

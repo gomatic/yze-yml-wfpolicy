@@ -209,3 +209,26 @@ func TestTheLibraryRefusesAFileTooLargeToBeAWorkflow(t *testing.T) {
 	_, over := wfpolicy.Diagnostics("w.yml", wfpolicy.Source(atLimit+"#"), nil)
 	assert.ErrorIs(t, over, wfpolicy.ErrTooLarge, "and one byte more is refused")
 }
+
+// TestEveryWholeFileFindingNamesTheFirstLine pins the position of the findings
+// that address a file rather than a reference. In the sibling analyzer the LINE
+// of every one of these was unasserted while its column was pinned, and five
+// separate mutations moved one to line 2 with the suite green — the same shape
+// is checked here rather than assumed absent.
+func TestEveryWholeFileFindingNamesTheFirstLine(t *testing.T) {
+	t.Parallel()
+	crowded := "jobs:\n  b:\n    steps:\n" + strings.Repeat("      - uses: o/a@main\n", 1500)
+
+	unreadable := wfpolicy.Report(reader(nil), []string{"locked.yml"}, nil)
+	require.Len(t, unreadable.Diagnostics, 1, "one file, one finding")
+	assert.Equal(t, 1, unreadable.Diagnostics[0].Line)
+
+	truncated := wfpolicy.Report(reader(map[string]string{"w.yml": crowded}), []string{"w.yml"}, nil)
+	assert.Equal(t, 1, truncated.Diagnostics[len(truncated.Diagnostics)-1].Line,
+		"the per-file truncation notice")
+
+	walked := wfpolicy.Unreadable([]string{"locked"})
+	require.Len(t, walked, 1, "one path, one finding — not two")
+	assert.Equal(t, 1, walked[0].Line)
+	assert.EqualValues(t, "locked", walked[0].Path)
+}

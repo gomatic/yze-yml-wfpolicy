@@ -22,7 +22,14 @@ const ErrNoPaths errs.Const = "no paths to analyze"
 // blocks forever on open and a character device never ends, so a single such
 // argument hangs the gate instead of failing it — the one outcome nobody can
 // diagnose from a stuck CI job.
-const ErrNotRegularFile errs.Const = "not a regular file"
+//
+// It IS the shared sentinel, not a second one beside it: the refusal is raised
+// by the discovery this command walks with, and nothing here ever returned the
+// local copy — a caller matched it only because the two happened to carry the
+// same text, so rewording either would have broken `errors.Is` for everyone.
+// That is the defect [ErrTooLarge] was already repaired for, one declaration
+// away, and this was the third of the three siblings still carrying it.
+const ErrNotRegularFile = goyze.ErrNotRegularFile
 
 // unreadableMessage formats the finding for a file that could not be parsed.
 const unreadableMessage = "cannot be analyzed as a workflow: %v; the gate cannot vouch for a file it could not " +
@@ -131,9 +138,11 @@ func fileFindings(read FileReader, file Path, owners Owners) ([]goyze.Diagnostic
 		diagnostic(file, finding(fmt.Sprintf(truncationMessage, held, findingLimit)))), held
 }
 
-// Unreadable is the finding for each tree the walk could not enter. A directory
-// the gate cannot descend into is reported rather than passed over, so nothing
-// is lost in silence and the run still yields every other file's findings.
+// Unreadable is the finding for each path the walk could not read: a directory
+// it could not enter, and a file it could not have read had it tried — a FIFO,
+// a device, a link resolving to nothing. Both are REPORTED rather than skipped,
+// because a path the gate cannot open is where an unchecked one would hide, and
+// the run still yields every other file's findings.
 func Unreadable(paths []string) []goyze.Diagnostic {
 	diags := make([]goyze.Diagnostic, 0, len(paths))
 	for _, path := range paths {

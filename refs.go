@@ -104,23 +104,48 @@ const containerScheme = "docker://"
 // with no `@` names a local action, which carries no ref to move, and a
 // container reference names no git ref at all.
 func movingRef(uses usesRef) (string, bool) {
-	// Trimmed FIRST. YAML preserves the space inside a quoted scalar, and
-	// testing the prefixes before trimming meant a single leading space turned
-	// a container image into a git ref and a local action into a remote one —
-	// each producing a finding the doc says this rule never makes.
-	trimmed := strings.TrimSpace(string(uses))
-	if strings.HasPrefix(trimmed, containerScheme) || strings.HasPrefix(trimmed, ".") {
+	_, ref, names := repositoryAndRef(uses)
+	if !names {
 		return "", false
 	}
-	// Cut at the FIRST `@`, which is where GitHub cuts: a repository name cannot
-	// contain one, so everything past it is the ref — and a ref may, so cutting
-	// at the last would read `o/a@v1@main` as the branch `main` and report a
-	// reference that names no such thing. [ownedRef] cuts the same way, and a
-	// test holds them to it: the two halves disagreeing about which `@` is the
-	// separator would give one value two different refs.
-	_, ref, found := strings.Cut(trimmed, "@")
-	if !found {
-		return "", false
-	}
-	return ref, isMovingRef(gitRef(ref))
+	return string(ref), isMovingRef(ref)
 }
+
+// repositoryAndRef splits a `uses:` value into the repository it names and the
+// ref it resolves from, reporting whether it names a git reference at all.
+//
+// ONE function, because there were two and each half of the analyzer had its own
+// copy of the same three decisions. Nothing made them agree except that somebody
+// wrote them the same way twice, and a rule with two implementations is a rule
+// that drifts — this package has already paid for that once, in the `@` they cut
+// at. The decisions:
+//
+//   - Trimmed FIRST. YAML preserves the space inside a quoted scalar, and testing
+//     the prefixes before trimming turned a container image into a git ref and a
+//     local action into a remote one, each a finding the rule never makes.
+//   - A container image and a local path name no git ref. Checked on the WHOLE
+//     value, before the split: cutting `docker://img@tag` at its first `@` yields
+//     the owner `docker:`, so a guard applied after could only fire for an owner
+//     list that literally contained it.
+//   - Cut at the FIRST `@`, which is where GitHub cuts: a repository name cannot
+//     contain one, so everything past it is the ref — and a ref may, so cutting
+//     at the last reads `o/a@v1@main` as the branch `main`, a reference naming no
+//     such thing.
+func repositoryAndRef(uses usesRef) (repository, gitRef, bool) {
+	trimmed := strings.TrimSpace(string(uses))
+	if strings.HasPrefix(trimmed, containerScheme) || strings.HasPrefix(trimmed, localPrefix) {
+		return "", "", false
+	}
+	repo, ref, found := strings.Cut(trimmed, "@")
+	if !found {
+		return "", "", false
+	}
+	return repository(repo), gitRef(ref), true
+}
+
+// repository is the `owner/name` half of a `uses:` value, before the ref.
+type repository string
+
+// localPrefix marks a `uses:` value naming a path in this repository rather than
+// an action somebody publishes. It carries no ref to move.
+const localPrefix = "."

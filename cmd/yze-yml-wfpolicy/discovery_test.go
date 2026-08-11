@@ -6,7 +6,10 @@ package main
 // proven there, once, rather than three times in three ways that disagreed.
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	goyze "github.com/gomatic/go-yze"
@@ -87,4 +90,38 @@ func TestDiscoveryClaimsOnlyWhatGitHubReads(t *testing.T) {
 		filepath.Join(dir, ".github/workflows/ci.yml"),
 		filepath.Join(dir, "action.yml"),
 	}, found.Files)
+}
+
+// TestAnUnreadableTreeIsReportedRatherThanLost pins that the command ATTACHES
+// what the walk could not read. The shared discovery hands those back — a
+// directory it could not enter, and now a file it could not have read — and a
+// command that dropped them would pass every other test while losing exactly
+// the path an unchecked workflow hides in. Both sibling analyzers had this
+// test; this one had nothing covering the path at all, so the attachment could
+// be doubled or deleted unnoticed.
+func TestAnUnreadableTreeIsReportedRatherThanLost(t *testing.T) {
+	dir := t.TempDir()
+	writeWorkflow(t, dir, ".github/workflows/ci.yml", pinned)
+	locked := filepath.Join(dir, "locked")
+	require.NoError(t, os.Mkdir(locked, 0o750))
+	original := files.WalkDir
+	files.WalkDir = deniedTree(locked)
+	t.Cleanup(func() { files.WalkDir = original })
+	buf := swapStdout(t)
+
+	require.Equal(t, 0, run([]string{dir}))
+
+	// Counted from the DECODED report, not from the text: the message repeats
+	// the path it names, so counting the string counts each finding twice and
+	// could not tell one finding from two.
+	var decoded goyze.Report
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &decoded))
+	unreadable := 0
+	for _, diag := range decoded.Diagnostics {
+		if strings.HasSuffix(diag.Path, "locked") {
+			unreadable++
+		}
+	}
+	assert.Equal(t, 1, unreadable, "the tree is reported, exactly once")
+	assert.Contains(t, buf.String(), "a ref that moves", "and every other file keeps its findings")
 }

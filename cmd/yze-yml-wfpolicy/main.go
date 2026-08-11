@@ -33,22 +33,32 @@ func main() { osExit(run(os.Args[1:])) }
 // run expands the arguments to workflow files, runs the analyzer, and emits the
 // report.
 func run(args []string) int {
+	if err := report(args); err != nil {
+		return fail(err)
+	}
+	return 0
+}
+
+// report is the run itself, as an ERROR rather than an exit code. run answers
+// the process, which cannot be matched: with the refusal only ever reaching an
+// int and a line of stderr, this command's sentinel could be swapped for any
+// other with the whole suite green, so the failure it exists to name had nothing
+// behind it. The two sibling analyzers carried the same gap and it was repaired
+// in each; this was the third.
+func report(args []string) error {
 	if len(args) == 0 {
-		return fail(wfpolicy.ErrNoPaths.With(nil))
+		return wfpolicy.ErrNoPaths.With(nil)
 	}
 	found, err := discovery().Expand(args)
 	if err != nil {
-		return fail(err)
+		return err
 	}
 	// Report cannot fail: an unreadable or unparseable file becomes a finding
 	// against that file rather than the run's error, so one bad file can never
 	// empty the report.
-	report := wfpolicy.Report(readFile, found.Files, configuredOwners())
-	report.Diagnostics = append(wfpolicy.Unreadable(found.Unreadable), report.Diagnostics...)
-	if err := json.NewEncoder(stdout).Encode(report); err != nil {
-		return fail(err)
-	}
-	return 0
+	out := wfpolicy.Report(readFile, found.Files, configuredOwners())
+	out.Diagnostics = append(wfpolicy.Unreadable(found.Unreadable), out.Diagnostics...)
+	return json.NewEncoder(stdout).Encode(out)
 }
 
 // fail prints err to stderr and returns the failure exit code.
