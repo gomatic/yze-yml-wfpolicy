@@ -231,3 +231,24 @@ func TestEveryDocumentInAStreamIsRead(t *testing.T) {
 	assert.Contains(t, diags[0].Message, "o/a@main")
 	assert.Contains(t, diags[1].Message, "o/b@main")
 }
+
+// TestThePublishedContractIsWhatConsumersHold pins the exported constants a
+// consumer actually names, which nothing referenced. A rule id is what a
+// baseline, a ratchet and a `//nolint` all key on, and a category is what the
+// suite filters by — each is frozen at publication and each could be changed
+// with the whole suite green. The sentinel is asserted through THIS package's
+// name rather than the library's, because that is the spelling a consumer
+// imports.
+func TestThePublishedContractIsWhatConsumersHold(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "yze/wfpolicy", wfpolicy.Rule, "the rule id every baseline keys on")
+	assert.Equal(t, "workflow", wfpolicy.Category, "the group the suite filters by")
+	// The sentinel a consumer holds must match the error the LIBRARY raises.
+	// Asserting it against itself is a tautology — the shape this suite has had
+	// to remove three times — and would hold even if the constant were a second
+	// one beside the shared sentinel rather than the shared sentinel itself.
+	assert.ErrorIs(t, goyze.ErrNotRegularFile, wfpolicy.ErrNotRegularFile,
+		"a refusal the discovery raises is one this package's constant names")
+	assert.ErrorIs(t, goyze.ErrTooLarge, wfpolicy.ErrTooLarge)
+}
